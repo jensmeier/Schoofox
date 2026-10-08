@@ -28,7 +28,7 @@ class SchulmanagerSymDo extends IPSModule
     private const PLAN_DAYS = 14;
     private const TEMPLATE_DAYS = 28;
     private const EXAM_DAYS = 56;
-    private const LETTER_DETAIL_MAX = 30;
+    private const LETTER_DETAIL_MAX = 100;
     private const INTERVAL_DEFAULT = 30;
     private const INTERVAL_MIN = 15;
     private const INTERVAL_MAX = 1440;
@@ -57,6 +57,13 @@ class SchulmanagerSymDo extends IPSModule
         $this->RegisterPropertyBoolean('ReadGrades', true);
         $this->RegisterPropertyBoolean('ReadLetters', true);
 
+        // Darstellung der eigenen Klassenseiten-Kachel.
+        $this->RegisterPropertyString('ClassPageTitle', 'Klassenseiten');
+        $this->RegisterPropertyInteger('LetterLimit', 10);
+        $this->RegisterPropertyInteger('LetterScrollHeight', 320);
+        $this->RegisterPropertyInteger('ExamDisplayLimit', 8);
+        $this->RegisterPropertyBoolean('ShowRefreshButton', true);
+
         $this->RegisterAttributeString('DetectedStudents', '[]');
         $this->RegisterAttributeString('StatusData', '{}');
         $this->RegisterAttributeString('BundleVersion', self::BUNDLE_FALLBACK);
@@ -77,6 +84,13 @@ class SchulmanagerSymDo extends IPSModule
         $this->RegisterVariableString('GradesJSON', 'Noten JSON');
         $this->RegisterVariableString('LettersJSON', 'Elternbriefe JSON');
 
+        // Eigene HTML-Kachel: sie ersetzt die bisherige große HTMLBox-Anzeige.
+        $this->SetVisualizationType(
+            defined('INSTANCE_VISUALIZATION_TYPE_HTML_FULLSCREEN')
+                ? INSTANCE_VISUALIZATION_TYPE_HTML_FULLSCREEN
+                : 1
+        );
+
         $this->RegisterTimer(
             'UpdateTimer',
             0,
@@ -88,7 +102,15 @@ class SchulmanagerSymDo extends IPSModule
     {
         parent::ApplyChanges();
 
-        foreach (['HomeworkJSON', 'ExamsJSON', 'GradesJSON', 'LettersJSON'] as $ident) {
+        // Auch bestehende Instanzen, die vor Version 1.3 angelegt wurden, auf die
+        // eigene Klassenseiten-Kachel umstellen.
+        $this->SetVisualizationType(
+            defined('INSTANCE_VISUALIZATION_TYPE_HTML_FULLSCREEN')
+                ? INSTANCE_VISUALIZATION_TYPE_HTML_FULLSCREEN
+                : 1
+        );
+
+        foreach (['Overview', 'HomeworkJSON', 'ExamsJSON', 'GradesJSON', 'LettersJSON'] as $ident) {
             $oid = $this->GetIDForIdent($ident);
             if ($oid > 0) {
                 @IPS_SetHidden($oid, true);
@@ -108,6 +130,10 @@ class SchulmanagerSymDo extends IPSModule
 
         $this->SetTimerInterval('UpdateTimer', $active ? $minutes * 60000 : 0);
         $this->SetStatus($active ? 102 : 104);
+
+        // Anzeigeeinstellungen (z. B. 10 Elternbriefe oder Scrollhöhe) sofort
+        // übernehmen, ohne einen neuen Schulmanager-Abruf zu erzwingen.
+        $this->RefreshOverviewFromStored();
     }
 
     public function RequestAction($Ident, $Value): void
@@ -145,9 +171,132 @@ class SchulmanagerSymDo extends IPSModule
             case 'ImportTemplate':
                 $this->UpdateFormField('StatusLabel', 'caption', $this->ImportWeeklyTemplate());
                 return;
+
+            case 'RenameClassPage':
+                IPS_SetName($this->InstanceID, 'SymDo - Klassenseiten');
+                return;
         }
 
         throw new Exception('Unbekannte Aktion: ' . (string)$Ident);
+    }
+
+    /**
+     * Eigene Tile-Visualisierung. Die Rohvariable "Overview" bleibt nur als
+     * interner Fallback im Objektbaum und ist ab 1.3 ausgeblendet.
+     */
+    public function GetVisualizationTile(): string
+    {
+        $html = $this->CurrentOverviewHtml();
+        $initial = json_encode(
+            $html,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+        );
+        if ($initial === false) {
+            $initial = '""';
+        }
+
+        return <<<'HTML'
+<style>
+:root{font-family:Arial,sans-serif;color:#202124}
+*{box-sizing:border-box}
+body{margin:0;background:transparent;color:inherit}
+#smsd-root{height:100%;overflow:hidden}
+.smsd-shell{height:100%;display:flex;flex-direction:column;gap:10px;padding:10px}
+.smsd-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.smsd-head h2{margin:0;font-size:24px;line-height:1.15}
+.smsd-source{font-size:12px;color:#667085;background:rgba(127,127,127,.10);padding:4px 8px;border-radius:999px}
+.smsd-spacer{flex:1}
+.smsd-refresh{border:0;border-radius:9px;padding:7px 10px;cursor:pointer;background:rgba(0,150,136,.12);color:inherit;font-weight:600}
+.smsd-tabs{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}
+.smsd-tab{border:1px solid rgba(127,127,127,.24);background:rgba(127,127,127,.07);color:inherit;border-radius:999px;padding:7px 13px;cursor:pointer;white-space:nowrap;font-weight:600}
+.smsd-tab.active{background:#10bfae;color:white;border-color:#10bfae}
+.smsd-body{min-height:0;overflow:hidden;flex:1}
+.smsd-child-panel{display:none;height:100%;overflow-y:auto;padding-right:4px;scrollbar-width:thin}
+.smsd-child-panel.active{display:block}
+.smsd-card{border:1px solid rgba(127,127,127,.20);border-radius:12px;padding:12px;background:rgba(255,255,255,.03);margin-bottom:10px}
+.smsd-card h3{margin:0 0 9px 0;font-size:18px}
+.smsd-muted{color:#777}
+.smsd-empty{padding:10px;border-radius:8px;background:rgba(127,127,127,.08)}
+.smsd-table{width:100%;border-collapse:collapse;font-size:14px}
+.smsd-table th,.smsd-table td{padding:7px;border-bottom:1px solid rgba(127,127,127,.18);text-align:left;vertical-align:top}
+.smsd-table th:last-child,.smsd-table td:last-child{text-align:right}
+.smsd-letter-scroll{overflow-y:auto;padding-right:4px;scrollbar-width:thin}
+.smsd-letter{margin:5px 0;padding:8px 10px;border:1px solid rgba(127,127,127,.18);border-radius:8px;background:rgba(127,127,127,.035)}
+.smsd-letter summary{cursor:pointer}
+.smsd-letter-text{white-space:pre-wrap;margin:10px 2px 4px 2px;line-height:1.45}
+.smsd-foot{font-size:11px;color:#777;margin-top:6px}
+@media(max-width:650px){.smsd-head h2{font-size:20px}.smsd-table{font-size:12px}.smsd-table th,.smsd-table td{padding:5px}.smsd-shell{padding:7px}}
+</style>
+<script>
+function smsdActivate(key){
+  document.querySelectorAll('.smsd-tab').forEach(function(b){b.classList.toggle('active',b.dataset.smsdTab===key)});
+  document.querySelectorAll('.smsd-child-panel').forEach(function(p){p.classList.toggle('active',p.dataset.smsdPanel===key)});
+}
+function smsdInit(){
+  var active=document.querySelector('.smsd-tab.active')||document.querySelector('.smsd-tab');
+  if(active) smsdActivate(active.dataset.smsdTab);
+}
+document.addEventListener('click',function(e){
+  var b=e.target.closest('.smsd-tab');
+  if(b){smsdActivate(b.dataset.smsdTab);}
+});
+function handleMessage(data){
+  var root=document.getElementById('smsd-root');
+  if(!root) return;
+  root.innerHTML=typeof data==='string'?data:String(data??'');
+  smsdInit();
+}
+</script>
+<div id="smsd-root"></div>
+HTML
+            . '<script>handleMessage(' . $initial . ');</script>';
+    }
+
+    private function PushVisualization(string $html): void
+    {
+        try {
+            $this->UpdateVisualizationValue($html);
+        } catch (Throwable $e) {
+            // Alte Visualisierungen ignorieren den Push; beim nächsten Öffnen
+            // liefert GetVisualizationTile() trotzdem den aktuellen Stand.
+        }
+    }
+
+    private function CurrentOverviewHtml(): string
+    {
+        $id = $this->GetIDForIdent('Overview');
+        if ($id > 0) {
+            $value = (string)GetValue($id);
+            if (trim($value) !== '') {
+                return $value;
+            }
+        }
+        return '<div class="smsd-shell"><div class="smsd-head"><h2>Klassenseiten</h2><span class="smsd-source">Schulmanager</span></div><div class="smsd-empty">Noch keine Daten. In der Instanz „Jetzt abrufen und übernehmen“ ausführen.</div></div>';
+    }
+
+    private function JsonVariable(string $ident, array $fallback): array
+    {
+        $id = $this->GetIDForIdent($ident);
+        if ($id <= 0) {
+            return $fallback;
+        }
+        $decoded = json_decode((string)GetValue($id), true);
+        return is_array($decoded) ? $decoded : $fallback;
+    }
+
+    private function RefreshOverviewFromStored(): void
+    {
+        // Beim allerersten Create existiert noch kein verwertbarer Bestand.
+        if ($this->GetIDForIdent('Overview') <= 0) {
+            return;
+        }
+        $homework = $this->JsonVariable('HomeworkJSON', []);
+        $exams = $this->JsonVariable('ExamsJSON', []);
+        $grades = $this->JsonVariable('GradesJSON', []);
+        $letters = $this->JsonVariable('LettersJSON', []);
+        $html = $this->BuildOverview($homework, $exams, $grades, $letters);
+        $this->SetStringIfChanged('Overview', $html);
+        $this->PushVisualization($html);
     }
 
     public function GetConfigurationForm(): string
@@ -261,7 +410,7 @@ class SchulmanagerSymDo extends IPSModule
                     [
                         'type' => 'List',
                         'name' => 'Mappings',
-                        'rowCount' => max(3, count($students)),
+                        'rowCount' => max(5, count($students)),
                         'add' => true,
                         'delete' => true,
                         'caption' => 'Schulmanager-Kind → SymDo-Kind',
@@ -295,6 +444,70 @@ class SchulmanagerSymDo extends IPSModule
                     [
                         'type' => 'Label',
                         'caption' => 'Der SymDo-Kindname muss dem Namen entsprechen, der in deiner SymDo-Stundenplaninstanz unter „Kinder“ steht. Nach „Kinder abrufen“ werden neue Kinder automatisch als Zeilen angelegt.'
+                    ]
+                ]
+            ],
+            [
+                'type' => 'ExpansionPanel',
+                'caption' => 'Klassenseite / Anzeige',
+                'expanded' => true,
+                'items' => [
+                    [
+                        'type' => 'RowLayout',
+                        'items' => [
+                            [
+                                'type' => 'ValidationTextBox',
+                                'name' => 'ClassPageTitle',
+                                'caption' => 'Überschrift in der Kachel',
+                                'width' => '300px'
+                            ],
+                            [
+                                'type' => 'NumberSpinner',
+                                'name' => 'ExamDisplayLimit',
+                                'caption' => 'Prüfungen anzeigen',
+                                'minimum' => 3,
+                                'maximum' => 20,
+                                'suffix' => ' Stück',
+                                'width' => '190px'
+                            ]
+                        ]
+                    ],
+                    [
+                        'type' => 'RowLayout',
+                        'items' => [
+                            [
+                                'type' => 'NumberSpinner',
+                                'name' => 'LetterLimit',
+                                'caption' => 'Neueste Elternbriefe je Kind',
+                                'minimum' => 5,
+                                'maximum' => 30,
+                                'suffix' => ' Stück',
+                                'width' => '240px'
+                            ],
+                            [
+                                'type' => 'NumberSpinner',
+                                'name' => 'LetterScrollHeight',
+                                'caption' => 'Höhe Elternbrief-Liste',
+                                'minimum' => 180,
+                                'maximum' => 800,
+                                'suffix' => ' px',
+                                'width' => '230px'
+                            ],
+                            [
+                                'type' => 'CheckBox',
+                                'name' => 'ShowRefreshButton',
+                                'caption' => 'Aktualisieren-Knopf in Kachel'
+                            ]
+                        ]
+                    ],
+                    [
+                        'type' => 'Label',
+                        'caption' => 'Bei mehreren Kindern erscheinen oben Umschaltknöpfe. Noten, Prüfungen und Elternbriefe bleiben je Kind getrennt. Standard: 10 Elternbriefe mit eigenem Scrollbereich.'
+                    ],
+                    [
+                        'type' => 'Button',
+                        'caption' => 'Instanzname auf „SymDo - Klassenseiten“ setzen',
+                        'onClick' => 'IPS_RequestAction($id, \'RenameClassPage\', 0);'
                     ]
                 ]
             ],
@@ -1652,12 +1865,17 @@ class SchulmanagerSymDo extends IPSModule
         $keep = [];
         $out = [];
 
+        $detailLimit = min(
+            self::LETTER_DETAIL_MAX,
+            max(10, $this->ReadPropertyInteger('LetterLimit') * max(1, count($this->Mappings())))
+        );
+
         foreach ($letters as $index => $letter) {
             if (!is_array($letter)) {
                 continue;
             }
             $id = (int)($letter['id'] ?? 0);
-            if ($id <= 0 || $index >= self::LETTER_DETAIL_MAX) {
+            if ($id <= 0 || $index >= $detailLimit) {
                 $out[] = $letter;
                 continue;
             }
@@ -2483,21 +2701,57 @@ class SchulmanagerSymDo extends IPSModule
         $this->SetStringIfChanged('ExamsJSON', $examsJson === false ? '{}' : $examsJson);
         $this->SetStringIfChanged('GradesJSON', $gradesJson === false ? '{}' : $gradesJson);
         $this->SetStringIfChanged('LettersJSON', $lettersJson === false ? '[]' : $lettersJson);
-        $this->SetStringIfChanged('Overview', $this->BuildOverview($homework, $exams, $grades, $letters));
+        $overview = $this->BuildOverview($homework, $exams, $grades, $letters);
+        $this->SetStringIfChanged('Overview', $overview);
+        $this->PushVisualization($overview);
     }
 
     private function BuildOverview(array $homework, array $exams, array $grades, array $letters): string
     {
         $esc = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         $mappings = $this->Mappings();
-        $html = '<div style="font-family:Arial,sans-serif;line-height:1.4;color:#222">';
-        $html .= '<h2 style="margin:0 0 16px 0">Schulmanager – Schule</h2>';
+        $title = trim($this->ReadPropertyString('ClassPageTitle'));
+        if ($title === '') {
+            $title = 'Klassenseiten';
+        }
+        $letterLimit = max(5, min(30, $this->ReadPropertyInteger('LetterLimit')));
+        $letterHeight = max(180, min(800, $this->ReadPropertyInteger('LetterScrollHeight')));
+        $examLimit = max(3, min(20, $this->ReadPropertyInteger('ExamDisplayLimit')));
+        $showRefresh = $this->ReadPropertyBoolean('ShowRefreshButton');
+
+        $html = '<div class="smsd-shell">';
+        $html .= '<div class="smsd-head"><h2>' . $esc($title) . '</h2><span class="smsd-source">Schulmanager</span><span class="smsd-spacer"></span>';
+        if ($showRefresh) {
+            $html .= '<button class="smsd-refresh" onclick="requestAction(\'UpdateNow\',0)">↻ Aktualisieren</button>';
+        }
+        $html .= '</div>';
 
         if ($mappings === []) {
-            $html .= '<div>Keine Kinder zugeordnet.</div></div>';
+            $html .= '<div class="smsd-empty">Keine Kinder zugeordnet. In der Instanz zuerst „Kinder abrufen“ und zuordnen.</div></div>';
             return $html;
         }
 
+        // Kind-Umschaltung. Alle aktiv zugeordneten Kinder werden unterstützt;
+        // es gibt bewusst kein festes Zwei-Kinder-Limit.
+        $html .= '<div class="smsd-tabs">';
+        $first = true;
+        foreach ($mappings as $mapping) {
+            $sid = (string)$mapping['studentId'];
+            $child = trim((string)$mapping['symdoChild']);
+            $gradeEntry = is_array($grades[$sid] ?? null) ? $grades[$sid] : [];
+            $examEntry = is_array($exams[$sid] ?? null) ? $exams[$sid] : [];
+            $homeworkEntry = is_array($homework[$sid] ?? null) ? $homework[$sid] : [];
+            $fullName = trim((string)($gradeEntry['name'] ?? ($examEntry['name'] ?? ($homeworkEntry['name'] ?? $child))));
+            $caption = $child !== '' ? $child : $fullName;
+            if ($caption === '') {
+                $caption = 'Kind ' . $sid;
+            }
+            $html .= '<button class="smsd-tab' . ($first ? ' active' : '') . '" data-smsd-tab="' . $esc($sid) . '">' . $esc($caption) . '</button>';
+            $first = false;
+        }
+        $html .= '</div><div class="smsd-body">';
+
+        $first = true;
         foreach ($mappings as $mapping) {
             $sid = (string)$mapping['studentId'];
             $child = trim((string)$mapping['symdoChild']);
@@ -2509,168 +2763,154 @@ class SchulmanagerSymDo extends IPSModule
                 $name = $child !== '' ? $child : ('Kind ' . $sid);
             }
 
-            $html .= '<section style="margin:0 0 26px 0;padding:14px;border:1px solid #ddd;border-radius:10px;background:#fff">';
-            $html .= '<h2 style="margin:0 0 14px 0;color:#2f6fa8">' . $esc($name) . '</h2>';
+            $html .= '<section class="smsd-child-panel' . ($first ? ' active' : '') . '" data-smsd-panel="' . $esc($sid) . '">';
+            $html .= '<div style="font-size:20px;font-weight:700;margin:2px 0 10px 2px">' . $esc($name) . '</div>';
 
             // ── Noten ──────────────────────────────────────────────────────
-            $gradeData = is_array($gradeEntry['data'] ?? null) ? $gradeEntry['data'] : [];
-            $schoolYear = trim((string)($gradeData['schoolYear'] ?? ''));
-            $html .= '<h3 style="margin:12px 0 8px 0">Noten'
-                . ($schoolYear !== '' ? ' – Schuljahr ' . $esc($schoolYear) : '')
-                . '</h3>';
-
-            $subjects = is_array($gradeData['subjects'] ?? null) ? $gradeData['subjects'] : [];
-            $hasGrades = ($gradeData['hasGrades'] ?? false) === true;
-            if (!$hasGrades || $subjects === []) {
-                if (trim((string)($gradeData['error'] ?? '')) !== '') {
-                    $html .= '<div style="color:#a35a00">Noten derzeit nicht lesbar. Beim nächsten Abruf wird erneut versucht.</div>';
+            if ($this->ReadPropertyBoolean('ReadGrades')) {
+                $gradeData = is_array($gradeEntry['data'] ?? null) ? $gradeEntry['data'] : [];
+                $schoolYear = trim((string)($gradeData['schoolYear'] ?? ''));
+                $html .= '<div class="smsd-card"><h3>Noten' . ($schoolYear !== '' ? ' – Schuljahr ' . $esc($schoolYear) : '') . '</h3>';
+                $subjects = is_array($gradeData['subjects'] ?? null) ? $gradeData['subjects'] : [];
+                $hasGrades = ($gradeData['hasGrades'] ?? false) === true;
+                if (!$hasGrades || $subjects === []) {
+                    if (trim((string)($gradeData['error'] ?? '')) !== '') {
+                        $html .= '<div class="smsd-empty">Noten derzeit nicht lesbar. Beim nächsten Abruf wird erneut versucht.</div>';
+                    } else {
+                        $html .= '<div class="smsd-empty">Noch keine Noten' . ($schoolYear !== '' ? ' im Schuljahr ' . $esc($schoolYear) : '') . '.</div>';
+                    }
                 } else {
-                    $html .= '<div style="padding:10px;background:#f5f7f9;border-radius:8px">Noch keine Noten'
-                        . ($schoolYear !== '' ? ' im Schuljahr ' . $esc($schoolYear) : '')
-                        . '.</div>';
-                }
-            } else {
-                $html .= '<table style="width:100%;border-collapse:collapse;font-size:14px">';
-                $html .= '<tr><th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Fach</th>'
-                    . '<th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Noten</th>'
-                    . '<th style="text-align:right;border-bottom:1px solid #ccc;padding:6px">Ø Fach</th></tr>';
-                foreach ($subjects as $subject) {
-                    if (!is_array($subject)) {
-                        continue;
-                    }
-                    $subjectName = trim((string)($subject['name'] ?? 'Fach'));
-                    $categoryTexts = [];
-                    $categoryCount = 0;
-                    $singleAverage = null;
-                    foreach ((array)($subject['categories'] ?? []) as $categoryName => $category) {
-                        if (!is_array($category)) {
+                    $html .= '<table class="smsd-table"><tr><th>Fach</th><th>Noten</th><th>Ø Fach</th></tr>';
+                    foreach ($subjects as $subject) {
+                        if (!is_array($subject)) {
                             continue;
                         }
-                        $values = [];
-                        foreach ((array)($category['grades'] ?? []) as $grade) {
-                            if (is_array($grade) && trim((string)($grade['value'] ?? '')) !== '') {
-                                $values[] = trim((string)$grade['value']);
+                        $subjectName = trim((string)($subject['name'] ?? 'Fach'));
+                        $categoryTexts = [];
+                        $categoryCount = 0;
+                        $singleAverage = null;
+                        foreach ((array)($subject['categories'] ?? []) as $categoryName => $category) {
+                            if (!is_array($category)) {
+                                continue;
                             }
+                            $values = [];
+                            foreach ((array)($category['grades'] ?? []) as $grade) {
+                                if (is_array($grade) && trim((string)($grade['value'] ?? '')) !== '') {
+                                    $values[] = trim((string)$grade['value']);
+                                }
+                            }
+                            if ($values === []) {
+                                continue;
+                            }
+                            $categoryCount++;
+                            $avg = is_numeric($category['average'] ?? null)
+                                ? number_format((float)$category['average'], 2, ',', '')
+                                : '—';
+                            if ($categoryCount === 1 && is_numeric($category['average'] ?? null)) {
+                                $singleAverage = (float)$category['average'];
+                            }
+                            $categoryTexts[] = '<b>' . $esc((string)$categoryName) . ':</b> ' . $esc(implode(', ', $values))
+                                . ' <span class="smsd-muted">(Ø ' . $esc($avg) . ')</span>';
                         }
-                        if ($values === []) {
-                            continue;
+                        $overall = '—';
+                        if (($subject['averageWeighted'] ?? false) === true && is_numeric($subject['average'] ?? null)) {
+                            $overall = number_format((float)$subject['average'], 2, ',', '');
+                        } elseif ($categoryCount === 1 && $singleAverage !== null) {
+                            $overall = number_format($singleAverage, 2, ',', '');
                         }
-                        $categoryCount++;
-                        $avg = is_numeric($category['average'] ?? null)
-                            ? number_format((float)$category['average'], 2, ',', '')
-                            : '—';
-                        if ($categoryCount === 1 && is_numeric($category['average'] ?? null)) {
-                            $singleAverage = (float)$category['average'];
-                        }
-                        $categoryTexts[] = '<b>' . $esc((string)$categoryName) . ':</b> '
-                            . $esc(implode(', ', $values))
-                            . ' <span style="color:#666">(Ø ' . $esc($avg) . ')</span>';
+                        $html .= '<tr><td><b>' . $esc($subjectName) . '</b></td><td>' . implode('<br>', $categoryTexts) . '</td><td><b>' . $esc($overall) . '</b>'
+                            . (($subject['averageWeighted'] ?? false) === true ? '' : ($categoryCount > 1 ? '<div class="smsd-foot">Gewichtung fehlt</div>' : ''))
+                            . '</td></tr>';
                     }
-                    $overall = '—';
-                    if (($subject['averageWeighted'] ?? false) === true && is_numeric($subject['average'] ?? null)) {
-                        $overall = number_format((float)$subject['average'], 2, ',', '');
-                    } elseif ($categoryCount === 1 && $singleAverage !== null) {
-                        $overall = number_format($singleAverage, 2, ',', '');
-                    }
-                    $html .= '<tr><td style="vertical-align:top;border-bottom:1px solid #eee;padding:7px"><b>'
-                        . $esc($subjectName) . '</b></td><td style="border-bottom:1px solid #eee;padding:7px">'
-                        . implode('<br>', $categoryTexts)
-                        . '</td><td style="vertical-align:top;text-align:right;border-bottom:1px solid #eee;padding:7px"><b>'
-                        . $esc($overall) . '</b>'
-                        . (($subject['averageWeighted'] ?? false) === true
-                            ? ''
-                            : ($categoryCount > 1 ? '<div style="font-size:11px;color:#777">Gewichtung fehlt</div>' : ''))
-                        . '</td></tr>';
+                    $html .= '</table><div class="smsd-foot">Durchschnitte sind rechnerische Werte. Schriftlich/mündlich werden nur zusammengeführt, wenn Schulmanager eine Gewichtung liefert.</div>';
                 }
-                $html .= '</table>';
-                $html .= '<div style="font-size:11px;color:#777;margin-top:5px">Durchschnitte sind rechnerische Werte. Schriftlich/mündlich werden nur zusammengeführt, wenn Schulmanager eine Gewichtung liefert.</div>';
+                $html .= '</div>';
             }
 
             // ── Prüfungen ──────────────────────────────────────────────────
-            $html .= '<h3 style="margin:18px 0 8px 0">Nächste Prüfungen</h3>';
-            $examItems = is_array($examEntry['items'] ?? null) ? $examEntry['items'] : [];
-            $classHours = is_array($examEntry['classHours'] ?? null) ? $examEntry['classHours'] : [];
-            if ($examItems === []) {
-                $html .= '<div>Keine anstehenden Prüfungen im Abrufzeitraum.</div>';
-            } else {
-                usort($examItems, static fn(array $a, array $b): int =>
-                    strcmp((string)($a['date'] ?? ''), (string)($b['date'] ?? ''))
-                );
-                $html .= '<table style="width:100%;border-collapse:collapse;font-size:14px">';
-                $html .= '<tr><th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Datum</th>'
-                    . '<th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Fach</th>'
-                    . '<th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Art</th>'
-                    . '<th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Stunde</th></tr>';
-                foreach (array_slice($examItems, 0, 12) as $exam) {
-                    if (!is_array($exam)) {
-                        continue;
-                    }
-                    $date = trim((string)($exam['date'] ?? ''));
-                    $ts = $date !== '' ? strtotime($date . ' 12:00') : false;
-                    $dateText = $ts !== false ? date('d.m.Y', $ts) : $date;
-                    $subject = trim((string)($exam['subject']['name'] ?? ($exam['subjectText'] ?? '')));
-                    $type = trim((string)($exam['type']['name'] ?? 'Klassenarbeit'));
-                    [, , $hourText] = $this->ExamDateTimes($exam, $classHours);
-                    $html .= '<tr><td style="border-bottom:1px solid #eee;padding:7px">' . $esc($dateText) . '</td>'
-                        . '<td style="border-bottom:1px solid #eee;padding:7px"><b>' . $esc($subject) . '</b></td>'
-                        . '<td style="border-bottom:1px solid #eee;padding:7px">' . $esc($type) . '</td>'
-                        . '<td style="border-bottom:1px solid #eee;padding:7px">' . $esc($hourText) . '</td></tr>';
-                }
-                $html .= '</table>';
-            }
-
-            // ── Elternbriefe ────────────────────────────────────────────────
-            $html .= '<h3 style="margin:18px 0 8px 0">Elternbriefe</h3>';
-            $childLetters = [];
-            foreach ($letters as $letter) {
-                if (is_array($letter) && $this->LetterBelongsToStudent($letter, $sid)) {
-                    $childLetters[] = $letter;
-                }
-            }
-            if ($childLetters === []) {
-                $html .= '<div>Keine Elternbriefe.</div>';
-            } else {
-                foreach (array_slice($childLetters, 0, 15) as $letter) {
-                    $dateRaw = (string)($letter['sentDate'] ?? ($letter['createdAt'] ?? ''));
-                    $date = $dateRaw !== '' && strtotime($dateRaw) !== false
-                        ? date('d.m.Y H:i', (int)strtotime($dateRaw))
-                        : '';
-                    $title = trim((string)($letter['title'] ?? 'Elternbrief'));
-                    $text = $this->PlainLetterText((string)($letter['text'] ?? ($letter['content'] ?? '')));
-                    $attachments = is_array($letter['attachments'] ?? null) ? $letter['attachments'] : [];
-                    $html .= '<details style="margin:5px 0;padding:7px 9px;border:1px solid #e3e3e3;border-radius:7px;background:#fafafa">';
-                    $html .= '<summary style="cursor:pointer"><b>' . $esc($title) . '</b>'
-                        . ($date !== '' ? ' <span style="color:#777">— ' . $esc($date) . '</span>' : '')
-                        . '</summary>';
-                    if ($text !== '') {
-                        $html .= '<div style="white-space:pre-wrap;margin:10px 2px 4px 2px">' . $esc($text) . '</div>';
-                    } else {
-                        $html .= '<div style="margin:10px 2px 4px 2px;color:#777">Kein Brieftext im Detailabruf vorhanden.</div>';
-                    }
-                    if ($attachments !== []) {
-                        $html .= '<div style="margin-top:8px"><b>Anhänge:</b> ';
-                        $names = [];
-                        foreach ($attachments as $attachment) {
-                            if (!is_array($attachment)) {
-                                continue;
-                            }
-                            $filename = trim((string)($attachment['filename'] ?? ''));
-                            if ($filename !== '') {
-                                $names[] = $esc($filename);
-                            }
+            if ($this->ReadPropertyBoolean('ReadExams')) {
+                $html .= '<div class="smsd-card"><h3>Nächste Prüfungen</h3>';
+                $examItems = is_array($examEntry['items'] ?? null) ? $examEntry['items'] : [];
+                $classHours = is_array($examEntry['classHours'] ?? null) ? $examEntry['classHours'] : [];
+                if ($examItems === []) {
+                    $html .= '<div class="smsd-empty">Keine anstehenden Prüfungen im Abrufzeitraum.</div>';
+                } else {
+                    usort($examItems, static fn(array $a, array $b): int => strcmp((string)($a['date'] ?? ''), (string)($b['date'] ?? '')));
+                    $html .= '<table class="smsd-table"><tr><th>Datum</th><th>Fach</th><th>Art</th><th>Stunde</th></tr>';
+                    foreach (array_slice($examItems, 0, $examLimit) as $exam) {
+                        if (!is_array($exam)) {
+                            continue;
                         }
-                        $html .= $names !== [] ? implode(', ', $names) : 'vorhanden';
-                        $html .= '</div>';
+                        $date = trim((string)($exam['date'] ?? ''));
+                        $ts = $date !== '' ? strtotime($date . ' 12:00') : false;
+                        $dateText = $ts !== false ? date('d.m.Y', $ts) : $date;
+                        $subject = trim((string)($exam['subject']['name'] ?? ($exam['subjectText'] ?? '')));
+                        $type = trim((string)($exam['type']['name'] ?? 'Klassenarbeit'));
+                        [, , $hourText] = $this->ExamDateTimes($exam, $classHours);
+                        $html .= '<tr><td>' . $esc($dateText) . '</td><td><b>' . $esc($subject) . '</b></td><td>' . $esc($type) . '</td><td>' . $esc($hourText) . '</td></tr>';
                     }
-                    $html .= '</details>';
+                    $html .= '</table>';
                 }
+                $html .= '</div>';
             }
 
-            $html .= '<div style="font-size:12px;color:#777;margin-top:14px">Hausaufgaben werden in der normalen SymDo-Hausaufgaben-Kachel geführt.</div>';
+            // ── Elternbriefe: nur die neuesten N, eigener Scrollbereich ─────
+            if ($this->ReadPropertyBoolean('ReadLetters')) {
+                $html .= '<div class="smsd-card"><h3>Elternbriefe <span class="smsd-muted" style="font-size:12px;font-weight:400">– neueste ' . $letterLimit . '</span></h3>';
+                $childLetters = [];
+                foreach ($letters as $letter) {
+                    if (is_array($letter) && $this->LetterBelongsToStudent($letter, $sid)) {
+                        $childLetters[] = $letter;
+                    }
+                }
+                usort($childLetters, static function (array $a, array $b): int {
+                    $ad = (string)($a['sentDate'] ?? ($a['createdAt'] ?? ''));
+                    $bd = (string)($b['sentDate'] ?? ($b['createdAt'] ?? ''));
+                    return strcmp($bd, $ad);
+                });
+                $childLetters = array_slice($childLetters, 0, $letterLimit);
+                if ($childLetters === []) {
+                    $html .= '<div class="smsd-empty">Keine Elternbriefe.</div>';
+                } else {
+                    $html .= '<div class="smsd-letter-scroll" style="max-height:' . $letterHeight . 'px">';
+                    foreach ($childLetters as $letter) {
+                        $dateRaw = (string)($letter['sentDate'] ?? ($letter['createdAt'] ?? ''));
+                        $date = $dateRaw !== '' && strtotime($dateRaw) !== false ? date('d.m.Y H:i', (int)strtotime($dateRaw)) : '';
+                        $letterTitle = trim((string)($letter['title'] ?? 'Elternbrief'));
+                        $text = $this->PlainLetterText((string)($letter['text'] ?? ($letter['content'] ?? '')));
+                        $attachments = is_array($letter['attachments'] ?? null) ? $letter['attachments'] : [];
+                        $html .= '<details class="smsd-letter"><summary><b>' . $esc($letterTitle) . '</b>'
+                            . ($date !== '' ? ' <span class="smsd-muted">— ' . $esc($date) . '</span>' : '') . '</summary>';
+                        if ($text !== '') {
+                            $html .= '<div class="smsd-letter-text">' . $esc($text) . '</div>';
+                        } else {
+                            $html .= '<div class="smsd-letter-text smsd-muted">Kein Brieftext im Detailabruf vorhanden.</div>';
+                        }
+                        if ($attachments !== []) {
+                            $names = [];
+                            foreach ($attachments as $attachment) {
+                                if (is_array($attachment)) {
+                                    $filename = trim((string)($attachment['filename'] ?? ''));
+                                    if ($filename !== '') {
+                                        $names[] = $esc($filename);
+                                    }
+                                }
+                            }
+                            $html .= '<div class="smsd-foot"><b>Anhänge:</b> ' . ($names !== [] ? implode(', ', $names) : 'vorhanden') . '</div>';
+                        }
+                        $html .= '</details>';
+                    }
+                    $html .= '</div>';
+                }
+                $html .= '</div>';
+            }
+
+            $html .= '<div class="smsd-foot">Hausaufgaben werden in der normalen SymDo-Hausaufgaben-Kachel geführt. Stundenplan und Vertretungen bleiben in „SymDo - Stundenplan“.</div>';
             $html .= '</section>';
+            $first = false;
         }
 
-        $html .= '</div>';
+        $html .= '</div></div>';
         return $html;
     }
 
@@ -2684,6 +2924,7 @@ class SchulmanagerSymDo extends IPSModule
             if ($id > 0) {
                 SetValueInteger($id, time());
             }
+            $this->RefreshOverviewFromStored();
         }
         $this->SendDebug('Schulmanager', $text, 0);
     }
