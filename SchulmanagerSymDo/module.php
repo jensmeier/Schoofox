@@ -9,10 +9,10 @@ declare(strict_types=1);
  * Der Stundenplan wird über die öffentliche SymDo-Funktion STPL_ImportSlots()
  * in eine bestehende SymDo-Stundenplaninstanz geschrieben.
  *
- * Hausaufgaben, Prüfungen und Elternbriefe werden zusätzlich im Modul als
- * Status/JSON bereitgestellt. Dadurch bleibt dieses Modul unabhängig vom
- * internen Aufbau des SymDo-Gateways und kann als eigene Bibliothek installiert
- * und aktualisiert werden.
+ * Hausaufgaben werden über die gekoppelte SymDo-App-API in den normalen
+ * SymDo-Hausaufgabenbestand synchronisiert. Prüfungen können mit exakter
+ * Schulstunde in einen über SymDo/OpenCalendar beschreibbaren Kalender geschrieben
+ * werden. Noten und Elternbriefe zeigt die eigene Schulmanager-Schulseite.
  */
 class SchulmanagerSymDo extends IPSModule
 {
@@ -28,6 +28,7 @@ class SchulmanagerSymDo extends IPSModule
     private const PLAN_DAYS = 14;
     private const TEMPLATE_DAYS = 28;
     private const EXAM_DAYS = 56;
+    private const LETTER_DETAIL_MAX = 30;
     private const INTERVAL_DEFAULT = 30;
     private const INTERVAL_MIN = 15;
     private const INTERVAL_MAX = 1440;
@@ -51,6 +52,9 @@ class SchulmanagerSymDo extends IPSModule
         $this->RegisterPropertyBoolean('SyncHomeworkToSymDo', true);
         $this->RegisterPropertyInteger('HomeworkLookbackDays', 7);
         $this->RegisterPropertyBoolean('ReadExams', true);
+        $this->RegisterPropertyBoolean('SyncExamsToCalendar', true);
+        $this->RegisterPropertyInteger('CalendarID', 0);
+        $this->RegisterPropertyBoolean('ReadGrades', true);
         $this->RegisterPropertyBoolean('ReadLetters', true);
 
         $this->RegisterAttributeString('DetectedStudents', '[]');
@@ -62,12 +66,15 @@ class SchulmanagerSymDo extends IPSModule
         $this->RegisterAttributeString('SymDoApiBase', '');
         $this->RegisterAttributeString('SymDoToken', '');
         $this->RegisterAttributeString('HomeworkLinks', '{}');
+        $this->RegisterAttributeString('CalendarLinks', '{}');
+        $this->RegisterAttributeString('LetterDetails', '{}');
 
         $this->RegisterVariableString('Status', 'Status');
         $this->RegisterVariableInteger('LastUpdate', 'Letzte Aktualisierung', '~UnixTimestamp');
-        $this->RegisterVariableString('Overview', 'Schulmanager Übersicht', '~HTMLBox');
+        $this->RegisterVariableString('Overview', 'Schulmanager Schulseite', '~HTMLBox');
         $this->RegisterVariableString('HomeworkJSON', 'Hausaufgaben JSON');
         $this->RegisterVariableString('ExamsJSON', 'Prüfungen JSON');
+        $this->RegisterVariableString('GradesJSON', 'Noten JSON');
         $this->RegisterVariableString('LettersJSON', 'Elternbriefe JSON');
 
         $this->RegisterTimer(
@@ -81,7 +88,7 @@ class SchulmanagerSymDo extends IPSModule
     {
         parent::ApplyChanges();
 
-        foreach (['HomeworkJSON', 'ExamsJSON', 'LettersJSON'] as $ident) {
+        foreach (['HomeworkJSON', 'ExamsJSON', 'GradesJSON', 'LettersJSON'] as $ident) {
             $oid = $this->GetIDForIdent($ident);
             if ($oid > 0) {
                 @IPS_SetHidden($oid, true);
@@ -147,6 +154,7 @@ class SchulmanagerSymDo extends IPSModule
     {
         $status = $this->StatusText();
         $students = $this->DetectedStudents();
+        $calendarOptions = $this->CalendarOptions();
 
         $studentOptions = [
             ['caption' => '— auswählen —', 'value' => '']
@@ -221,7 +229,7 @@ class SchulmanagerSymDo extends IPSModule
                     [
                         'type' => 'SelectInstance',
                         'name' => 'SymDoGatewayInstanceID',
-                        'caption' => 'SymDo-Gateway (für Hausaufgaben)',
+                        'caption' => 'SymDo-Gateway (Hausaufgaben / Kalender)',
                         'width' => '580px'
                     ],
                     [
@@ -307,21 +315,30 @@ class SchulmanagerSymDo extends IPSModule
                         'width' => '260px'
                     ],
                     ['type' => 'CheckBox', 'name' => 'ReadExams', 'caption' => 'Klassenarbeiten / Prüfungen lesen'],
-                    ['type' => 'CheckBox', 'name' => 'ReadLetters', 'caption' => 'Elternbriefe lesen'],
+                    ['type' => 'CheckBox', 'name' => 'SyncExamsToCalendar', 'caption' => 'Prüfungen mit exakter Schulstunde in den Kalender synchronisieren'],
+                    [
+                        'type' => 'Select',
+                        'name' => 'CalendarID',
+                        'caption' => 'Kalender für Klassenarbeiten',
+                        'width' => '520px',
+                        'options' => $calendarOptions
+                    ],
+                    ['type' => 'CheckBox', 'name' => 'ReadGrades', 'caption' => 'Noten / Zensuren lesen'],
+                    ['type' => 'CheckBox', 'name' => 'ReadLetters', 'caption' => 'Elternbriefe lesen und auf der Schulseite anzeigen'],
                     [
                         'type' => 'Label',
-                        'caption' => 'Stundenplan, Vertretungen, Entfall und Veranstaltungen werden direkt in SymDo importiert. Hausaufgaben können zusätzlich in die vorhandene SymDo-Hausaufgabenliste synchronisiert werden. Prüfungen und Elternbriefe bleiben vorerst in der Schulmanager-Übersicht.'
+                        'caption' => 'Prüfungen werden nur dann in OpenCalendar geschrieben, wenn ein beschreibbarer Kalender gewählt ist. Noten werden nach Fach und Bewertungsblock getrennt; ein Gesamtdurchschnitt erscheint nur, wenn Schulmanager die Gewichtung liefert.'
                     ]
                 ]
             ],
             [
                 'type' => 'ExpansionPanel',
-                'caption' => 'SymDo-Hausaufgaben verbinden',
+                'caption' => 'SymDo verbinden',
                 'expanded' => true,
                 'items' => [
                     [
                         'type' => 'Label',
-                        'caption' => 'Einmalig mit dem oben gewählten SymDo-Gateway koppeln. Das Modul erscheint danach im Gateway als gekoppeltes Gerät „Schulmanager Sync“.'
+                        'caption' => 'Einmalig mit dem oben gewählten SymDo-Gateway koppeln. Die Verbindung wird für Hausaufgaben, Familienzuordnung und Kalender verwendet. Das Modul erscheint als Gerät „Schulmanager Sync“.'
                     ],
                     ['type' => 'Label', 'name' => 'SymDoStatusLabel', 'caption' => $this->SymDoStatusText()],
                     [
@@ -513,6 +530,7 @@ class SchulmanagerSymDo extends IPSModule
 
             $homeworkAll = [];
             $examsAll = [];
+            $gradesAll = [];
             $parts = [];
 
             foreach ($mappings as $mapping) {
@@ -541,6 +559,11 @@ class SchulmanagerSymDo extends IPSModule
                 }
 
                 $classId = $this->FindClassId($schedule);
+                if ($classId <= 0) {
+                    $rawStudent = is_array($student['raw'] ?? null) ? $student['raw'] : [];
+                    $classId = (int)($rawStudent['classId'] ?? ($rawStudent['class']['id'] ?? 0));
+                }
+
                 $classHours = $classId > 0
                     ? $this->ApiCall($login['token'], 'schedules', 'get-class-hours', ['classId' => $classId])
                     : [];
@@ -564,8 +587,29 @@ class SchulmanagerSymDo extends IPSModule
                     $examsAll[$sid] = [
                         'child' => $child,
                         'name' => (string)$student['name'],
-                        'items' => $exams
+                        'items' => $exams,
+                        'classHours' => $classHours
                     ];
+                }
+
+                if ($this->ReadPropertyBoolean('ReadGrades')) {
+                    try {
+                        $gradesAll[$sid] = [
+                            'child' => $child,
+                            'name' => (string)$student['name'],
+                            'data' => $this->FetchGrades($login['token'], (int)$sid, $classId)
+                        ];
+                    } catch (Throwable $e) {
+                        $gradesAll[$sid] = [
+                            'child' => $child,
+                            'name' => (string)$student['name'],
+                            'data' => [
+                                'subjects' => [],
+                                'hasGrades' => false,
+                                'error' => $e->getMessage()
+                            ]
+                        ];
+                    }
                 }
 
                 [$days, $skipped] = $this->BuildDatedDays($schedule, $classHours, $from, $to, $exams);
@@ -622,13 +666,13 @@ class SchulmanagerSymDo extends IPSModule
             if ($this->ReadPropertyBoolean('ReadLetters')) {
                 try {
                     $l = $this->ApiCall($login['token'], 'letters', 'get-letters', []);
-                    $letters = is_array($l) ? $l : [];
+                    $letters = is_array($l) ? $this->EnrichLetters($login['token'], $l) : [];
                 } catch (Throwable $e) {
                     $letters = [];
                 }
             }
 
-            $this->StoreData($homeworkAll, $examsAll, $letters);
+            $this->StoreData($homeworkAll, $examsAll, $gradesAll, $letters);
 
             if ($apply
                 && $this->ReadPropertyBoolean('ReadHomework')
@@ -637,6 +681,16 @@ class SchulmanagerSymDo extends IPSModule
                     $parts[] = $this->SyncHomeworkToSymDo($homeworkAll);
                 } catch (Throwable $e) {
                     $parts[] = 'SymDo-Hausaufgaben: FEHLER — ' . $e->getMessage();
+                }
+            }
+
+            if ($apply
+                && $this->ReadPropertyBoolean('ReadExams')
+                && $this->ReadPropertyBoolean('SyncExamsToCalendar')) {
+                try {
+                    $parts[] = $this->SyncExamsToCalendar($examsAll);
+                } catch (Throwable $e) {
+                    $parts[] = 'Kalender: FEHLER — ' . $e->getMessage();
                 }
             }
 
@@ -1171,6 +1225,310 @@ class SchulmanagerSymDo extends IPSModule
         return $first;
     }
 
+
+    /**
+     * Noten des laufenden Schuljahres. Schulmanager nutzt hierfür NICHT den alten
+     * get-grades-Endpunkt, sondern get-grading-information-for-student.
+     *
+     * @return array<string,mixed>
+     */
+    private function FetchGrades(string $token, int $studentId, int $classId): array
+    {
+        $today = new DateTimeImmutable('today');
+        if ((int)$today->format('n') >= 8) {
+            $start = new DateTimeImmutable($today->format('Y') . '-08-01');
+            $end = new DateTimeImmutable(((int)$today->format('Y') + 1) . '-07-31');
+        } else {
+            $start = new DateTimeImmutable(((int)$today->format('Y') - 1) . '-08-01');
+            $end = new DateTimeImmutable($today->format('Y') . '-07-31');
+        }
+
+        $termId = 0;
+        if ($classId > 0) {
+            try {
+                $classes = $this->ApiCall($token, 'grades', 'poqa', [
+                    'action' => [
+                        'model' => 'main/class',
+                        'action' => 'findAll',
+                        'parameters' => [[
+                            'where' => ['id' => $classId]
+                        ]]
+                    ],
+                    'uiState' => 'main.modules.grades.student'
+                ]);
+                if (is_array($classes) && is_array($classes[0] ?? null)) {
+                    $termId = (int)($classes[0]['termId'] ?? 0);
+                }
+            } catch (Throwable $e) {
+                $termId = 0;
+            }
+        }
+
+        $params = [
+            'studentId' => $studentId,
+            'start' => $start->format('Y-m-d'),
+            'end' => $end->format('Y-m-d'),
+            'gradingPeriodType' => 'entireYear'
+        ];
+        if ($termId > 0) {
+            $params['termId'] = $termId;
+        }
+
+        $raw = $this->ApiCall(
+            $token,
+            'grades',
+            'get-grading-information-for-student',
+            $params
+        );
+        if (!is_array($raw)) {
+            $raw = [];
+        }
+
+        $subjectMap = [];
+        $hasRawGrades = (array)($raw['gradingEvents'] ?? []) !== []
+            || (array)($raw['finalGrades'] ?? []) !== [];
+        if ($hasRawGrades) {
+            try {
+                $subjects = $this->ApiCall($token, 'grades', 'poqa', [
+                    'action' => [
+                        'model' => 'main/subject',
+                        'action' => 'findAll',
+                        'parameters' => [[
+                            'attributes' => ['id', 'name', 'abbreviation', 'orderIndex', 'officialKey']
+                        ]]
+                    ],
+                    'uiState' => 'main.modules.grades.student'
+                ]);
+                foreach (is_array($subjects) ? $subjects : [] as $subject) {
+                    if (!is_array($subject)) {
+                        continue;
+                    }
+                    $id = (int)($subject['id'] ?? 0);
+                    if ($id > 0) {
+                        $subjectMap[$id] = [
+                            'name' => trim((string)($subject['name'] ?? '')),
+                            'abbreviation' => trim((string)($subject['abbreviation'] ?? ''))
+                        ];
+                    }
+                }
+            } catch (Throwable $e) {
+                // Kursname ist ein brauchbarer Rückfall.
+            }
+        }
+
+        return $this->NormalizeGrades($raw, $subjectMap, $start, $end);
+    }
+
+    /** @return array<string,mixed> */
+    private function NormalizeGrades(
+        array $raw,
+        array $subjectMap,
+        DateTimeImmutable $schoolYearStart,
+        DateTimeImmutable $schoolYearEnd
+    ): array {
+        $courses = [];
+        foreach ((array)($raw['courses'] ?? []) as $course) {
+            if (!is_array($course)) {
+                continue;
+            }
+            $id = (int)($course['id'] ?? 0);
+            if ($id > 0) {
+                $courses[$id] = $course;
+            }
+        }
+
+        $typeNames = [];
+        foreach ((array)($raw['typePresets'] ?? []) as $preset) {
+            if (!is_array($preset) || !is_array($preset['gradeType'] ?? null)) {
+                continue;
+            }
+            $type = $preset['gradeType'];
+            $id = (int)($type['id'] ?? 0);
+            if ($id > 0) {
+                $typeNames[$id] = trim((string)($type['name'] ?? ($type['abbreviation'] ?? '')));
+            }
+        }
+
+        $blockNames = [];
+        $blockWeights = [];
+        foreach ((array)($raw['blockPresets'] ?? []) as $preset) {
+            if (!is_array($preset) || !is_array($preset['gradingBlock'] ?? null)) {
+                continue;
+            }
+            $courseId = (int)($preset['courseId'] ?? 0);
+            $block = $preset['gradingBlock'];
+            $blockId = (int)($block['id'] ?? 0);
+            if ($courseId <= 0 || $blockId <= 0) {
+                continue;
+            }
+            $blockNames[$blockId] = trim((string)($block['name'] ?? ('Block ' . $blockId)));
+            $weight = (float)($preset['weighting'] ?? 0);
+            if ($weight > 0) {
+                $blockWeights[$courseId][$blockId] = $weight;
+            }
+        }
+
+        $subjects = [];
+        foreach ((array)($raw['gradingEvents'] ?? []) as $event) {
+            if (!is_array($event)) {
+                continue;
+            }
+            $courseId = (int)($event['courseId'] ?? 0);
+            $course = $courses[$courseId] ?? [];
+            $subjectId = (int)($course['subjectId'] ?? 0);
+            if ($subjectId <= 0) {
+                continue;
+            }
+            $name = trim((string)($subjectMap[$subjectId]['name'] ?? ''));
+            if ($name === '') {
+                $name = trim((string)($course['name'] ?? ''));
+            }
+            if ($name === '') {
+                $name = 'Fach ' . $subjectId;
+            }
+
+            if (!isset($subjects[$subjectId])) {
+                $subjects[$subjectId] = [
+                    'name' => $name,
+                    'abbreviation' => trim((string)($subjectMap[$subjectId]['abbreviation'] ?? '')),
+                    'categories' => [],
+                    'average' => null,
+                    'averageWeighted' => false
+                ];
+            }
+
+            $blockId = (int)($event['gradingBlockId'] ?? 0);
+            $typeId = (int)($event['gradeTypeId'] ?? 0);
+            $category = trim((string)($blockNames[$blockId] ?? ($typeNames[$typeId] ?? 'Sonstige')));
+            if ($category === '') {
+                $category = 'Sonstige';
+            }
+            if (!isset($subjects[$subjectId]['categories'][$category])) {
+                $subjects[$subjectId]['categories'][$category] = [
+                    'grades' => [],
+                    'average' => null,
+                    'blockId' => $blockId,
+                    'blockWeight' => (float)($blockWeights[$courseId][$blockId] ?? 0)
+                ];
+            }
+
+            $eventWeight = max(0.0, (float)($event['weighting'] ?? 1));
+            if ($eventWeight <= 0) {
+                $eventWeight = 1.0;
+            }
+            foreach ((array)($event['grades'] ?? []) as $grade) {
+                if (!is_array($grade)) {
+                    continue;
+                }
+                $rawValue = $grade['value'] ?? null;
+                if ($rawValue === null || $rawValue === '') {
+                    continue;
+                }
+                $display = $this->GradeDisplay($rawValue);
+                $numeric = $this->GradeNumeric($display);
+                $subjects[$subjectId]['categories'][$category]['grades'][] = [
+                    'value' => $display,
+                    'numeric' => $numeric,
+                    'date' => trim((string)($event['date'] ?? '')),
+                    'topic' => trim((string)($event['topic'] ?? '')),
+                    'weight' => $eventWeight,
+                    'repeat' => ($grade['isRepeatExam'] ?? false) === true
+                ];
+            }
+        }
+
+        foreach ($subjects as &$subject) {
+            $weightedBlocks = [];
+            foreach ($subject['categories'] as &$category) {
+                $sum = 0.0;
+                $weights = 0.0;
+                foreach ($category['grades'] as $grade) {
+                    if (!is_array($grade) || !is_numeric($grade['numeric'] ?? null)) {
+                        continue;
+                    }
+                    $w = max(0.01, (float)($grade['weight'] ?? 1));
+                    $sum += (float)$grade['numeric'] * $w;
+                    $weights += $w;
+                }
+                if ($weights > 0) {
+                    $category['average'] = round($sum / $weights, 2);
+                    if ((float)$category['blockWeight'] > 0) {
+                        $weightedBlocks[] = [
+                            'average' => (float)$category['average'],
+                            'weight' => (float)$category['blockWeight']
+                        ];
+                    }
+                }
+            }
+            unset($category);
+
+            if ($weightedBlocks !== []) {
+                $sum = 0.0;
+                $weights = 0.0;
+                foreach ($weightedBlocks as $block) {
+                    $sum += $block['average'] * $block['weight'];
+                    $weights += $block['weight'];
+                }
+                if ($weights > 0) {
+                    $subject['average'] = round($sum / $weights, 2);
+                    $subject['averageWeighted'] = true;
+                }
+            }
+        }
+        unset($subject);
+
+        uasort($subjects, static fn(array $a, array $b): int =>
+            strcasecmp((string)$a['name'], (string)$b['name'])
+        );
+
+        $hasGrades = false;
+        foreach ($subjects as $subject) {
+            foreach ((array)($subject['categories'] ?? []) as $category) {
+                if ((array)($category['grades'] ?? []) !== []) {
+                    $hasGrades = true;
+                    break 2;
+                }
+            }
+        }
+
+        return [
+            'schoolYear' => $this->SchoolYearLabel($schoolYearStart),
+            'schoolYearStart' => $schoolYearStart->format('Y-m-d'),
+            'schoolYearEnd' => $schoolYearEnd->format('Y-m-d'),
+            'hasGrades' => $hasGrades,
+            'subjects' => array_values($subjects)
+        ];
+    }
+
+    private function GradeDisplay(mixed $value): string
+    {
+        $display = trim((string)$value);
+        if (str_contains($display, '~')) {
+            $parts = explode('~', $display);
+            $display = trim((string)end($parts));
+        }
+        return $display;
+    }
+
+    private function GradeNumeric(string $display): ?float
+    {
+        $v = trim($display);
+        if ($v === '') {
+            return null;
+        }
+        // Plus/Minus bleibt sichtbar; für den rechnerischen Blockdurchschnitt wird
+        // bewusst nur die Grundnote verwendet, solange Schulmanager keinen exakten
+        // numerischen Wert dafür liefert.
+        $v = rtrim($v, '+-');
+        return is_numeric($v) ? (float)$v : null;
+    }
+
+    private function SchoolYearLabel(DateTimeImmutable $start): string
+    {
+        $y = (int)$start->format('Y');
+        return $y . '/' . substr((string)($y + 1), -2);
+    }
+
     private function BundleVersion(): string
     {
         $cached = trim($this->ReadAttributeString('BundleVersion'));
@@ -1238,7 +1596,7 @@ class SchulmanagerSymDo extends IPSModule
 
         $headers = [
             'Accept: application/json, text/plain, */*',
-            'User-Agent: Mozilla/5.0 IP-Symcon Schulmanager-SymDo/1.0'
+            'User-Agent: Mozilla/5.0 IP-Symcon Schulmanager-SymDo/1.2'
         ];
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
@@ -1271,6 +1629,184 @@ class SchulmanagerSymDo extends IPSModule
             throw new Exception('HTTP ' . $status . ' bei ' . parse_url($url, PHP_URL_PATH));
         }
         return (string)$response;
+    }
+
+
+    /**
+     * Ergänzt die Elternbriefliste um Text, Anhänge und Empfängerstatus.
+     * Bereits gelesene Details werden anhand updatedAt zwischengespeichert, damit
+     * der 30-Minuten-Takt nicht jedes Mal jeden Brief neu abruft.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private function EnrichLetters(string $token, array $letters): array
+    {
+        usort($letters, static function (array $a, array $b): int {
+            $ad = (string)($a['sentDate'] ?? ($a['createdAt'] ?? ''));
+            $bd = (string)($b['sentDate'] ?? ($b['createdAt'] ?? ''));
+            return strcmp($bd, $ad);
+        });
+
+        $cache = json_decode($this->ReadAttributeString('LetterDetails'), true);
+        $cache = is_array($cache) ? $cache : [];
+        $keep = [];
+        $out = [];
+
+        foreach ($letters as $index => $letter) {
+            if (!is_array($letter)) {
+                continue;
+            }
+            $id = (int)($letter['id'] ?? 0);
+            if ($id <= 0 || $index >= self::LETTER_DETAIL_MAX) {
+                $out[] = $letter;
+                continue;
+            }
+            $stamp = trim((string)($letter['updatedAt'] ?? ($letter['sentDate'] ?? '')));
+            $cached = is_array($cache[(string)$id] ?? null) ? $cache[(string)$id] : [];
+            $detail = [];
+            if ($cached !== [] && (string)($cached['_stamp'] ?? '') === $stamp) {
+                $detail = is_array($cached['detail'] ?? null) ? $cached['detail'] : [];
+            } else {
+                $detail = $this->FetchLetterDetailForMappedStudents($token, $id);
+            }
+
+            if ($detail !== []) {
+                foreach (['title', 'text', 'content', 'sentDate', 'createdAt', 'updatedAt', 'answerDeadline', 'attachments', 'studentStatuses'] as $key) {
+                    if (array_key_exists($key, $detail)) {
+                        $letter[$key] = $detail[$key];
+                    }
+                }
+            }
+            $keep[(string)$id] = ['_stamp' => $stamp, 'detail' => $detail];
+            $out[] = $letter;
+        }
+
+        // Nur die aktuellen Details halten; alte Briefe außerhalb des Limits brauchen
+        // keinen dauerhaften Cache.
+        $this->WriteAttributeString(
+            'LetterDetails',
+            json_encode($keep, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        );
+
+        return $out;
+    }
+
+
+    private function FetchLetterDetailForMappedStudents(string $token, int $letterId): array
+    {
+        $merged = [];
+        $statuses = [];
+        $attachments = [];
+        $studentIds = [];
+        foreach ($this->Mappings() as $mapping) {
+            $sid = (int)($mapping['studentId'] ?? 0);
+            if ($sid > 0) {
+                $studentIds[] = $sid;
+            }
+        }
+        $studentIds = array_values(array_unique($studentIds));
+        if ($studentIds === []) {
+            return [];
+        }
+
+        foreach ($studentIds as $studentId) {
+            try {
+                $fetched = $this->ApiCall($token, 'letters', 'poqa', [
+                    'action' => [
+                        'model' => 'modules/letters/letter',
+                        'action' => 'findByPk',
+                        'parameters' => [
+                            $letterId,
+                            [
+                                'include' => [
+                                    [
+                                        'association' => 'attachments',
+                                        'required' => false,
+                                        'attributes' => ['id', 'filename', 'contentType', 'inline', 'letterId']
+                                    ],
+                                    [
+                                        'association' => 'studentStatuses',
+                                        'required' => true,
+                                        'where' => ['studentId' => ['$in' => [$studentId]]],
+                                        'include' => [[
+                                            'association' => 'student',
+                                            'required' => true
+                                        ]]
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ],
+                    'uiState' => 'main.modules.letters.view.details'
+                ]);
+            } catch (Throwable $e) {
+                continue;
+            }
+            if (!is_array($fetched) || $fetched === []) {
+                continue;
+            }
+            if ($merged === []) {
+                $merged = $fetched;
+            }
+            foreach ((array)($fetched['studentStatuses'] ?? []) as $status) {
+                if (!is_array($status)) {
+                    continue;
+                }
+                $key = (string)($status['studentId'] ?? ($status['id'] ?? count($statuses)));
+                $statuses[$key] = $status;
+            }
+            foreach ((array)($fetched['attachments'] ?? []) as $attachment) {
+                if (!is_array($attachment)) {
+                    continue;
+                }
+                $key = (string)($attachment['id'] ?? ($attachment['filename'] ?? count($attachments)));
+                $attachments[$key] = $attachment;
+            }
+        }
+
+        if ($merged !== []) {
+            if ($statuses !== []) {
+                $merged['studentStatuses'] = array_values($statuses);
+            }
+            if ($attachments !== []) {
+                $merged['attachments'] = array_values($attachments);
+            }
+        }
+        return $merged;
+    }
+
+    private function LetterBelongsToStudent(array $letter, string $studentId): bool
+    {
+        $statuses = (array)($letter['studentStatuses'] ?? []);
+        if ($statuses === []) {
+            return true;
+        }
+        foreach ($statuses as $status) {
+            if (!is_array($status)) {
+                continue;
+            }
+            if ((string)($status['studentId'] ?? '') === $studentId) {
+                return true;
+            }
+            if (is_array($status['student'] ?? null)
+                && (string)($status['student']['id'] ?? '') === $studentId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function PlainLetterText(string $html): string
+    {
+        $text = preg_replace(
+            ['~<\s*br\s*/?\s*>~i', '~</\s*p\s*>~i', '~</\s*div\s*>~i', '~</\s*li\s*>~i'],
+            ["\n", "\n", "\n", "\n"],
+            $html
+        );
+        $text = html_entity_decode(strip_tags((string)$text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = preg_replace("/[ \t]+\n/u", "\n", $text);
+        $text = preg_replace("/\n{3,}/u", "\n\n", $text);
+        return trim((string)$text);
     }
 
     private function SymDoGatewayID(): int
@@ -1311,7 +1847,7 @@ class SchulmanagerSymDo extends IPSModule
                 'deviceName' => 'Schulmanager Sync',
                 'model' => 'IP-Symcon Modul',
                 'platform' => 'IP-Symcon',
-                'appVersion' => '1.1'
+                'appVersion' => '1.2'
             ]);
             if (!is_array($answer) || ($answer['ok'] ?? false) !== true) {
                 throw new Exception('SymDo hat das Pairing abgelehnt.');
@@ -1368,6 +1904,338 @@ class SchulmanagerSymDo extends IPSModule
         return trim($this->ReadAttributeString('SymDoToken')) !== ''
             ? 'SymDo ist gekoppelt. Mit „SymDo-Verbindung testen“ kann die Verbindung geprüft werden.'
             : 'Noch nicht mit SymDo gekoppelt.';
+    }
+
+
+    /** @return array<int,array{caption:string,value:int}> */
+    private function CalendarOptions(): array
+    {
+        $options = [['caption' => '— keinen Kalender synchronisieren —', 'value' => 0]];
+        $current = max(0, $this->ReadPropertyInteger('CalendarID'));
+        $known = [];
+        foreach ($this->SymDoCalendars() as $calendar) {
+            if (!is_array($calendar)) {
+                continue;
+            }
+            $id = (int)($calendar['id'] ?? 0);
+            if ($id <= 0 || ($calendar['canWrite'] ?? false) !== true) {
+                continue;
+            }
+            $name = trim((string)($calendar['name'] ?? ('Kalender #' . $id)));
+            $options[] = ['caption' => $name, 'value' => $id];
+            $known[$id] = true;
+        }
+        if ($current > 0 && !isset($known[$current])) {
+            $options[] = ['caption' => 'Aktuell gewählt: Kalender #' . $current, 'value' => $current];
+        }
+        return $options;
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    private function SymDoCalendars(): array
+    {
+        $api = rtrim($this->ReadAttributeString('SymDoApiBase'), '/');
+        $token = trim($this->ReadAttributeString('SymDoToken'));
+        if ($api === '' || $token === '') {
+            return [];
+        }
+        try {
+            $answer = $this->RequestJson($api . '/calendar', null, $token);
+            return is_array($answer['calendars'] ?? null)
+                ? array_values(array_filter($answer['calendars'], 'is_array'))
+                : [];
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    private function SymDoCalendarRequest(array $body): array
+    {
+        $api = rtrim($this->ReadAttributeString('SymDoApiBase'), '/');
+        $token = trim($this->ReadAttributeString('SymDoToken'));
+        if ($api === '' || $token === '') {
+            throw new Exception('SymDo ist noch nicht gekoppelt.');
+        }
+        $answer = $this->RequestJson($api . '/calendar', $body, $token);
+        if (!is_array($answer) || ($answer['ok'] ?? false) !== true) {
+            $code = is_array($answer) ? (string)($answer['error']['code'] ?? 'unknown') : 'invalid_response';
+            $message = is_array($answer) ? trim((string)($answer['error']['message'] ?? '')) : '';
+            throw new Exception('SymDo-Kalender: ' . $code . ($message !== '' ? ' — ' . $message : ''));
+        }
+        return $answer;
+    }
+
+    private function SyncExamsToCalendar(array $examsAll): string
+    {
+        $calendarId = max(0, $this->ReadPropertyInteger('CalendarID'));
+        if ($calendarId <= 0) {
+            return 'Kalender: kein Kalender gewählt';
+        }
+
+        $writable = false;
+        foreach ($this->SymDoCalendars() as $calendar) {
+            if ((int)($calendar['id'] ?? 0) === $calendarId && ($calendar['canWrite'] ?? false) === true) {
+                $writable = true;
+                break;
+            }
+        }
+        if (!$writable) {
+            throw new Exception('gewählter Kalender ist nicht beschreibbar oder nicht erreichbar');
+        }
+
+        $users = $this->SymDoUsers();
+        if ($users === []) {
+            throw new Exception('keine SymDo-Familienmitglieder gefunden');
+        }
+
+        $links = json_decode($this->ReadAttributeString('CalendarLinks'), true);
+        $links = is_array($links) ? $links : [];
+        $seen = [];
+        $created = 0;
+        $updated = 0;
+        $deleted = 0;
+        $unchanged = 0;
+        $skipped = 0;
+        $today = date('Y-m-d');
+
+        foreach ($examsAll as $studentId => $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $child = trim((string)($entry['child'] ?? ''));
+            $userId = $this->ResolveSymDoUserID($child, $users);
+            if ($userId === '') {
+                $skipped += count((array)($entry['items'] ?? []));
+                continue;
+            }
+            $classHours = is_array($entry['classHours'] ?? null) ? $entry['classHours'] : [];
+
+            foreach ((array)($entry['items'] ?? []) as $exam) {
+                if (!is_array($exam)) {
+                    continue;
+                }
+                $date = trim((string)($exam['date'] ?? ''));
+                if ($date === '' || $date < $today) {
+                    continue;
+                }
+
+                [$start, $end, $hourText] = $this->ExamDateTimes($exam, $classHours);
+                if ($start === '' || $end === '') {
+                    $skipped++;
+                    continue;
+                }
+
+                $subject = trim((string)($exam['subject']['name'] ?? ($exam['subjectText'] ?? '')));
+                if ($subject === '') {
+                    $subject = 'Prüfung';
+                }
+                $type = trim((string)($exam['type']['name'] ?? 'Klassenarbeit'));
+                if ($type === '') {
+                    $type = 'Klassenarbeit';
+                }
+                $comment = trim((string)($exam['comment'] ?? ''));
+                $title = '📚 ' . $type . ' ' . $subject;
+                $info = 'Schulmanager Online • ' . $child;
+                if ($hourText !== '') {
+                    $info .= ' • ' . $hourText;
+                }
+                if ($comment !== '') {
+                    $info .= "\n" . $comment;
+                }
+
+                $examId = trim((string)($exam['id'] ?? ''));
+                $keyMaterial = $examId !== ''
+                    ? (string)$studentId . '|id|' . $examId
+                    : (string)$studentId . '|' . $date . '|' . mb_strtolower($subject) . '|' . mb_strtolower($type) . '|' . $start;
+                $key = sha1($keyMaterial);
+                $seen[$key] = true;
+
+                $event = [
+                    'title' => mb_substr($title, 0, 160),
+                    'info' => mb_substr($info, 0, 2000),
+                    'location' => '',
+                    'start' => $start,
+                    'end' => $end,
+                    'allDay' => false,
+                    'members' => [$userId]
+                ];
+                $hash = sha1(json_encode([
+                    'calendarID' => $calendarId,
+                    'event' => $event
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+
+                $link = is_array($links[$key] ?? null) ? $links[$key] : [];
+                $oldCalendarId = (int)($link['calendarID'] ?? $calendarId);
+
+                if ($link !== [] && $oldCalendarId !== $calendarId) {
+                    try {
+                        $this->SymDoCalendarRequest([
+                            'action' => 'delete',
+                            'calendarID' => $oldCalendarId,
+                            'event' => [
+                                'id' => (string)($link['id'] ?? ''),
+                                'uid' => (string)($link['uid'] ?? ''),
+                                'startTimestamp' => (int)($link['startTimestamp'] ?? 0)
+                            ]
+                        ]);
+                        $deleted++;
+                    } catch (Throwable $e) {
+                        // Neuer Kalender soll trotzdem beliefert werden.
+                    }
+                    $link = [];
+                }
+
+                if ($link !== [] && (string)($link['hash'] ?? '') === $hash) {
+                    $links[$key]['seenAt'] = time();
+                    $unchanged++;
+                    continue;
+                }
+
+                if ($link !== []) {
+                    $updateEvent = $event + [
+                        'id' => (string)($link['id'] ?? ''),
+                        'uid' => (string)($link['uid'] ?? ''),
+                        'startTimestamp' => (int)($link['startTimestamp'] ?? 0)
+                    ];
+                    $answer = $this->SymDoCalendarRequest([
+                        'action' => 'update',
+                        'calendarID' => $calendarId,
+                        'event' => $updateEvent
+                    ]);
+                    $saved = is_array($answer['event'] ?? null) ? $answer['event'] : [];
+                    $updated++;
+                } else {
+                    $answer = $this->SymDoCalendarRequest([
+                        'action' => 'create',
+                        'calendarID' => $calendarId,
+                        'event' => $event
+                    ]);
+                    $saved = is_array($answer['event'] ?? null) ? $answer['event'] : [];
+                    $created++;
+                }
+
+                $links[$key] = [
+                    'calendarID' => $calendarId,
+                    'id' => trim((string)($saved['id'] ?? ($link['id'] ?? ''))),
+                    'uid' => trim((string)($saved['uid'] ?? ($link['uid'] ?? ''))),
+                    'startTimestamp' => (int)($saved['startTimestamp'] ?? strtotime($start)),
+                    'date' => $date,
+                    'hash' => $hash,
+                    'studentId' => (string)$studentId,
+                    'seenAt' => time()
+                ];
+            }
+        }
+
+        foreach (array_keys($links) as $key) {
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $link = is_array($links[$key] ?? null) ? $links[$key] : [];
+            $date = trim((string)($link['date'] ?? ''));
+            if ($date !== '' && $date >= $today) {
+                try {
+                    $this->SymDoCalendarRequest([
+                        'action' => 'delete',
+                        'calendarID' => (int)($link['calendarID'] ?? $calendarId),
+                        'event' => [
+                            'id' => (string)($link['id'] ?? ''),
+                            'uid' => (string)($link['uid'] ?? ''),
+                            'startTimestamp' => (int)($link['startTimestamp'] ?? 0)
+                        ]
+                    ]);
+                    $deleted++;
+                } catch (Throwable $e) {
+                    // Link bleibt nicht hängen; beim nächsten Abruf würde sonst immer
+                    // wieder versucht, einen längst entfernten Schulmanager-Termin zu löschen.
+                }
+                unset($links[$key]);
+            } elseif ($date !== '' && $date < date('Y-m-d', strtotime('-7 days'))) {
+                unset($links[$key]);
+            }
+        }
+
+        $this->WriteAttributeString(
+            'CalendarLinks',
+            json_encode($links, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        );
+
+        $text = sprintf(
+            'Kalender: %d neu, %d aktualisiert, %d entfernt, %d unverändert',
+            $created,
+            $updated,
+            $deleted,
+            $unchanged
+        );
+        if ($skipped > 0) {
+            $text .= ', ' . $skipped . ' ohne eindeutige Zeit/Kind-Zuordnung';
+        }
+        return $text;
+    }
+
+    /** @return array{0:string,1:string,2:string} */
+    private function ExamDateTimes(array $exam, array $classHours): array
+    {
+        $date = trim((string)($exam['date'] ?? ''));
+        if ($date === '') {
+            return ['', '', ''];
+        }
+
+        $startHour = is_array($exam['startClassHour'] ?? null) ? $exam['startClassHour'] : [];
+        $endHour = is_array($exam['endClassHour'] ?? null) ? $exam['endClassHour'] : $startHour;
+        $number = trim((string)($startHour['number'] ?? ''));
+        $endNumber = trim((string)($endHour['number'] ?? $number));
+
+        $from = $this->TimeHHMM((string)($startHour['from'] ?? ''));
+        $until = $this->TimeHHMM((string)($endHour['until'] ?? ''));
+
+        if ($from === '' || $until === '') {
+            $byId = [];
+            $byNumber = [];
+            foreach ($classHours as $hour) {
+                if (!is_array($hour)) {
+                    continue;
+                }
+                $id = (int)($hour['id'] ?? 0);
+                if ($id > 0) {
+                    $byId[$id] = $hour;
+                }
+                $n = trim((string)($hour['number'] ?? ''));
+                if ($n !== '') {
+                    $byNumber[$n] = $hour;
+                }
+            }
+            $startFallback = $byId[(int)($startHour['id'] ?? 0)] ?? ($byNumber[$number] ?? null);
+            $endFallback = $byId[(int)($endHour['id'] ?? 0)] ?? ($byNumber[$endNumber] ?? $startFallback);
+            if (is_array($startFallback)) {
+                [$fallbackStart, ] = $this->HourTimes($startFallback, $date);
+                if ($from === '') {
+                    $from = $fallbackStart;
+                }
+            }
+            if (is_array($endFallback)) {
+                [, $fallbackEnd] = $this->HourTimes($endFallback, $date);
+                if ($until === '') {
+                    $until = $fallbackEnd;
+                }
+            }
+        }
+
+        if ($from === '' || $until === '') {
+            return ['', '', ''];
+        }
+
+        $hourText = $number !== ''
+            ? ($endNumber !== '' && $endNumber !== $number
+                ? $number . '.–' . $endNumber . '. Stunde'
+                : $number . '. Stunde')
+            : '';
+
+        return [
+            $date . 'T' . $from,
+            $date . 'T' . $until,
+            $hourText
+        ];
     }
 
     private function SymDoUsers(): array
@@ -1604,88 +2472,202 @@ class SchulmanagerSymDo extends IPSModule
         return is_array($raw) ? array_values(array_filter($raw, 'is_array')) : [];
     }
 
-    private function StoreData(array $homework, array $exams, array $letters): void
+    private function StoreData(array $homework, array $exams, array $grades, array $letters): void
     {
         $homeworkJson = json_encode($homework, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $examsJson = json_encode($exams, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $gradesJson = json_encode($grades, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $lettersJson = json_encode($letters, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         $this->SetStringIfChanged('HomeworkJSON', $homeworkJson === false ? '{}' : $homeworkJson);
         $this->SetStringIfChanged('ExamsJSON', $examsJson === false ? '{}' : $examsJson);
+        $this->SetStringIfChanged('GradesJSON', $gradesJson === false ? '{}' : $gradesJson);
         $this->SetStringIfChanged('LettersJSON', $lettersJson === false ? '[]' : $lettersJson);
-        $this->SetStringIfChanged('Overview', $this->BuildOverview($homework, $exams, $letters));
+        $this->SetStringIfChanged('Overview', $this->BuildOverview($homework, $exams, $grades, $letters));
     }
 
-    private function BuildOverview(array $homework, array $exams, array $letters): string
+    private function BuildOverview(array $homework, array $exams, array $grades, array $letters): string
     {
-        $esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-        $html = '<div style="font-family:Arial,sans-serif;line-height:1.35">';
-        $html .= '<h2 style="margin:0 0 12px 0">Schulmanager Online</h2>';
+        $esc = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $mappings = $this->Mappings();
+        $html = '<div style="font-family:Arial,sans-serif;line-height:1.4;color:#222">';
+        $html .= '<h2 style="margin:0 0 16px 0">Schulmanager – Schule</h2>';
 
-        foreach ($homework as $entry) {
-            if (!is_array($entry)) {
-                continue;
-            }
-            $name = $esc((string)($entry['name'] ?? 'Kind'));
-            $items = is_array($entry['items'] ?? null) ? $entry['items'] : [];
-            $html .= '<h3 style="margin:14px 0 6px 0">Hausaufgaben — ' . $name . '</h3>';
-            if ($items === []) {
-                $html .= '<div>Keine Daten.</div>';
-            } else {
-                $items = array_slice(array_reverse($items), 0, 8);
-                $html .= '<ul style="margin-top:4px">';
-                foreach ($items as $item) {
-                    if (!is_array($item)) {
-                        continue;
-                    }
-                    $date = $esc((string)($item['date'] ?? ''));
-                    $subject = $esc((string)($item['subject'] ?? ''));
-                    $text = $esc((string)($item['homework'] ?? ''));
-                    $html .= '<li><b>' . $date . ' ' . $subject . '</b> — ' . $text . '</li>';
-                }
-                $html .= '</ul>';
-            }
+        if ($mappings === []) {
+            $html .= '<div>Keine Kinder zugeordnet.</div></div>';
+            return $html;
         }
 
-        foreach ($exams as $entry) {
-            if (!is_array($entry)) {
-                continue;
+        foreach ($mappings as $mapping) {
+            $sid = (string)$mapping['studentId'];
+            $child = trim((string)$mapping['symdoChild']);
+            $gradeEntry = is_array($grades[$sid] ?? null) ? $grades[$sid] : [];
+            $examEntry = is_array($exams[$sid] ?? null) ? $exams[$sid] : [];
+            $homeworkEntry = is_array($homework[$sid] ?? null) ? $homework[$sid] : [];
+            $name = trim((string)($gradeEntry['name'] ?? ($examEntry['name'] ?? ($homeworkEntry['name'] ?? $child))));
+            if ($name === '') {
+                $name = $child !== '' ? $child : ('Kind ' . $sid);
             }
-            $name = $esc((string)($entry['name'] ?? 'Kind'));
-            $items = is_array($entry['items'] ?? null) ? $entry['items'] : [];
-            $html .= '<h3 style="margin:14px 0 6px 0">Prüfungen — ' . $name . '</h3>';
-            if ($items === []) {
+
+            $html .= '<section style="margin:0 0 26px 0;padding:14px;border:1px solid #ddd;border-radius:10px;background:#fff">';
+            $html .= '<h2 style="margin:0 0 14px 0;color:#2f6fa8">' . $esc($name) . '</h2>';
+
+            // ── Noten ──────────────────────────────────────────────────────
+            $gradeData = is_array($gradeEntry['data'] ?? null) ? $gradeEntry['data'] : [];
+            $schoolYear = trim((string)($gradeData['schoolYear'] ?? ''));
+            $html .= '<h3 style="margin:12px 0 8px 0">Noten'
+                . ($schoolYear !== '' ? ' – Schuljahr ' . $esc($schoolYear) : '')
+                . '</h3>';
+
+            $subjects = is_array($gradeData['subjects'] ?? null) ? $gradeData['subjects'] : [];
+            $hasGrades = ($gradeData['hasGrades'] ?? false) === true;
+            if (!$hasGrades || $subjects === []) {
+                if (trim((string)($gradeData['error'] ?? '')) !== '') {
+                    $html .= '<div style="color:#a35a00">Noten derzeit nicht lesbar. Beim nächsten Abruf wird erneut versucht.</div>';
+                } else {
+                    $html .= '<div style="padding:10px;background:#f5f7f9;border-radius:8px">Noch keine Noten'
+                        . ($schoolYear !== '' ? ' im Schuljahr ' . $esc($schoolYear) : '')
+                        . '.</div>';
+                }
+            } else {
+                $html .= '<table style="width:100%;border-collapse:collapse;font-size:14px">';
+                $html .= '<tr><th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Fach</th>'
+                    . '<th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Noten</th>'
+                    . '<th style="text-align:right;border-bottom:1px solid #ccc;padding:6px">Ø Fach</th></tr>';
+                foreach ($subjects as $subject) {
+                    if (!is_array($subject)) {
+                        continue;
+                    }
+                    $subjectName = trim((string)($subject['name'] ?? 'Fach'));
+                    $categoryTexts = [];
+                    $categoryCount = 0;
+                    $singleAverage = null;
+                    foreach ((array)($subject['categories'] ?? []) as $categoryName => $category) {
+                        if (!is_array($category)) {
+                            continue;
+                        }
+                        $values = [];
+                        foreach ((array)($category['grades'] ?? []) as $grade) {
+                            if (is_array($grade) && trim((string)($grade['value'] ?? '')) !== '') {
+                                $values[] = trim((string)$grade['value']);
+                            }
+                        }
+                        if ($values === []) {
+                            continue;
+                        }
+                        $categoryCount++;
+                        $avg = is_numeric($category['average'] ?? null)
+                            ? number_format((float)$category['average'], 2, ',', '')
+                            : '—';
+                        if ($categoryCount === 1 && is_numeric($category['average'] ?? null)) {
+                            $singleAverage = (float)$category['average'];
+                        }
+                        $categoryTexts[] = '<b>' . $esc((string)$categoryName) . ':</b> '
+                            . $esc(implode(', ', $values))
+                            . ' <span style="color:#666">(Ø ' . $esc($avg) . ')</span>';
+                    }
+                    $overall = '—';
+                    if (($subject['averageWeighted'] ?? false) === true && is_numeric($subject['average'] ?? null)) {
+                        $overall = number_format((float)$subject['average'], 2, ',', '');
+                    } elseif ($categoryCount === 1 && $singleAverage !== null) {
+                        $overall = number_format($singleAverage, 2, ',', '');
+                    }
+                    $html .= '<tr><td style="vertical-align:top;border-bottom:1px solid #eee;padding:7px"><b>'
+                        . $esc($subjectName) . '</b></td><td style="border-bottom:1px solid #eee;padding:7px">'
+                        . implode('<br>', $categoryTexts)
+                        . '</td><td style="vertical-align:top;text-align:right;border-bottom:1px solid #eee;padding:7px"><b>'
+                        . $esc($overall) . '</b>'
+                        . (($subject['averageWeighted'] ?? false) === true
+                            ? ''
+                            : ($categoryCount > 1 ? '<div style="font-size:11px;color:#777">Gewichtung fehlt</div>' : ''))
+                        . '</td></tr>';
+                }
+                $html .= '</table>';
+                $html .= '<div style="font-size:11px;color:#777;margin-top:5px">Durchschnitte sind rechnerische Werte. Schriftlich/mündlich werden nur zusammengeführt, wenn Schulmanager eine Gewichtung liefert.</div>';
+            }
+
+            // ── Prüfungen ──────────────────────────────────────────────────
+            $html .= '<h3 style="margin:18px 0 8px 0">Nächste Prüfungen</h3>';
+            $examItems = is_array($examEntry['items'] ?? null) ? $examEntry['items'] : [];
+            $classHours = is_array($examEntry['classHours'] ?? null) ? $examEntry['classHours'] : [];
+            if ($examItems === []) {
                 $html .= '<div>Keine anstehenden Prüfungen im Abrufzeitraum.</div>';
             } else {
-                $html .= '<ul style="margin-top:4px">';
-                foreach (array_slice($items, 0, 8) as $item) {
-                    if (!is_array($item)) {
+                usort($examItems, static fn(array $a, array $b): int =>
+                    strcmp((string)($a['date'] ?? ''), (string)($b['date'] ?? ''))
+                );
+                $html .= '<table style="width:100%;border-collapse:collapse;font-size:14px">';
+                $html .= '<tr><th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Datum</th>'
+                    . '<th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Fach</th>'
+                    . '<th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Art</th>'
+                    . '<th style="text-align:left;border-bottom:1px solid #ccc;padding:6px">Stunde</th></tr>';
+                foreach (array_slice($examItems, 0, 12) as $exam) {
+                    if (!is_array($exam)) {
                         continue;
                     }
-                    $date = $esc((string)($item['date'] ?? ''));
-                    $subject = $esc((string)($item['subject']['name'] ?? ''));
-                    $type = $esc((string)($item['type']['name'] ?? 'Prüfung'));
-                    $html .= '<li><b>' . $date . ' ' . $subject . '</b> — ' . $type . '</li>';
+                    $date = trim((string)($exam['date'] ?? ''));
+                    $ts = $date !== '' ? strtotime($date . ' 12:00') : false;
+                    $dateText = $ts !== false ? date('d.m.Y', $ts) : $date;
+                    $subject = trim((string)($exam['subject']['name'] ?? ($exam['subjectText'] ?? '')));
+                    $type = trim((string)($exam['type']['name'] ?? 'Klassenarbeit'));
+                    [, , $hourText] = $this->ExamDateTimes($exam, $classHours);
+                    $html .= '<tr><td style="border-bottom:1px solid #eee;padding:7px">' . $esc($dateText) . '</td>'
+                        . '<td style="border-bottom:1px solid #eee;padding:7px"><b>' . $esc($subject) . '</b></td>'
+                        . '<td style="border-bottom:1px solid #eee;padding:7px">' . $esc($type) . '</td>'
+                        . '<td style="border-bottom:1px solid #eee;padding:7px">' . $esc($hourText) . '</td></tr>';
                 }
-                $html .= '</ul>';
+                $html .= '</table>';
             }
-        }
 
-        $html .= '<h3 style="margin:14px 0 6px 0">Elternbriefe</h3>';
-        if ($letters === []) {
-            $html .= '<div>Keine Daten.</div>';
-        } else {
-            $html .= '<ul style="margin-top:4px">';
-            foreach (array_slice($letters, 0, 10) as $letter) {
-                if (!is_array($letter)) {
-                    continue;
+            // ── Elternbriefe ────────────────────────────────────────────────
+            $html .= '<h3 style="margin:18px 0 8px 0">Elternbriefe</h3>';
+            $childLetters = [];
+            foreach ($letters as $letter) {
+                if (is_array($letter) && $this->LetterBelongsToStudent($letter, $sid)) {
+                    $childLetters[] = $letter;
                 }
-                $dateRaw = (string)($letter['sentDate'] ?? ($letter['createdAt'] ?? ''));
-                $date = $dateRaw !== '' ? date('d.m.Y H:i', strtotime($dateRaw)) : '';
-                $title = $esc((string)($letter['title'] ?? 'Elternbrief'));
-                $html .= '<li><b>' . $esc($date) . '</b> — ' . $title . '</li>';
             }
-            $html .= '</ul>';
+            if ($childLetters === []) {
+                $html .= '<div>Keine Elternbriefe.</div>';
+            } else {
+                foreach (array_slice($childLetters, 0, 15) as $letter) {
+                    $dateRaw = (string)($letter['sentDate'] ?? ($letter['createdAt'] ?? ''));
+                    $date = $dateRaw !== '' && strtotime($dateRaw) !== false
+                        ? date('d.m.Y H:i', (int)strtotime($dateRaw))
+                        : '';
+                    $title = trim((string)($letter['title'] ?? 'Elternbrief'));
+                    $text = $this->PlainLetterText((string)($letter['text'] ?? ($letter['content'] ?? '')));
+                    $attachments = is_array($letter['attachments'] ?? null) ? $letter['attachments'] : [];
+                    $html .= '<details style="margin:5px 0;padding:7px 9px;border:1px solid #e3e3e3;border-radius:7px;background:#fafafa">';
+                    $html .= '<summary style="cursor:pointer"><b>' . $esc($title) . '</b>'
+                        . ($date !== '' ? ' <span style="color:#777">— ' . $esc($date) . '</span>' : '')
+                        . '</summary>';
+                    if ($text !== '') {
+                        $html .= '<div style="white-space:pre-wrap;margin:10px 2px 4px 2px">' . $esc($text) . '</div>';
+                    } else {
+                        $html .= '<div style="margin:10px 2px 4px 2px;color:#777">Kein Brieftext im Detailabruf vorhanden.</div>';
+                    }
+                    if ($attachments !== []) {
+                        $html .= '<div style="margin-top:8px"><b>Anhänge:</b> ';
+                        $names = [];
+                        foreach ($attachments as $attachment) {
+                            if (!is_array($attachment)) {
+                                continue;
+                            }
+                            $filename = trim((string)($attachment['filename'] ?? ''));
+                            if ($filename !== '') {
+                                $names[] = $esc($filename);
+                            }
+                        }
+                        $html .= $names !== [] ? implode(', ', $names) : 'vorhanden';
+                        $html .= '</div>';
+                    }
+                    $html .= '</details>';
+                }
+            }
+
+            $html .= '<div style="font-size:12px;color:#777;margin-top:14px">Hausaufgaben werden in der normalen SymDo-Hausaufgaben-Kachel geführt.</div>';
+            $html .= '</section>';
         }
 
         $html .= '</div>';
