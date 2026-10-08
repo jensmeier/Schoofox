@@ -1,0 +1,14 @@
+{
+  "id": "{CF826E64-52DB-49B4-9A50-2DADE588AB37}",
+  "name": "Schulmanager SymDo",
+  "type": 3,
+  "vendor": "JZCG",
+  "aliases": [
+    "Schulmanager Online für SymDo"
+  ],
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "SMSD",
+  "url": "https://github.com/jensmeier/Schoofox"
+}
