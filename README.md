@@ -11,7 +11,7 @@ Eigenständiges IP-Symcon-Modul für **Schulmanager Online** mit Anbindung an de
 - Unterrichtsentfall → SymDo
 - Veranstaltungen → SymDo
 - Klassenarbeiten im importierten Stundenplan markieren
-- Hausaufgaben lesen
+- Hausaufgaben lesen und direkt in die normale SymDo-Hausaufgabenliste synchronisieren
 - Prüfungen bis 8 Wochen voraus lesen
 - Elternbriefliste lesen
 - Wochenvorlage aus regulären Schulmanager-Stunden erzeugen
@@ -39,9 +39,23 @@ Sind beide Kinder unter demselben Schulmanager-Elternkonto, reicht **eine Moduli
 
 Falls ein zweites Kind einen anderen Schulmanager-Zugang bzw. eine andere Schule verwendet, einfach eine **zweite Instanz von Schulmanager SymDo** anlegen.
 
+## SymDo-Hausaufgaben
+
+Ab Version 1.1 kann das Modul die Schulmanager-Hausaufgaben über die vorhandene SymDo-App-API in den normalen SymDo-Hausaufgabenbestand übernehmen. Dafür:
+
+1. im Modul die richtige **SymDo-Gateway**-Instanz auswählen,
+2. **Mit SymDo verbinden** einmal anklicken,
+3. Verbindung testen,
+4. **Hausaufgaben in die normale SymDo-Hausaufgabenliste übernehmen** aktiviert lassen,
+5. **Jetzt abrufen und übernehmen** ausführen.
+
+Das Schulmanager-Modul erscheint im SymDo-Gateway als gekoppeltes Gerät **„Schulmanager Sync“**. Abhaken in SymDo bleibt erhalten; Änderungen am Text oder Datum aus Schulmanager werden nachgezogen. Verschwundene, noch offene Schulmanager-Aufgaben werden entfernt. Erledigte Aufgaben bleiben als Verlauf erhalten.
+
+Die Roh-JSON-Variablen für Hausaufgaben, Prüfungen und Elternbriefe werden ab 1.1 im Objektbaum intern weitergeführt, aber für die Visualisierung ausgeblendet.
+
 ## Hinweis zur SymDo-Anbindung
 
-Der aktuelle Stundenplan wird über die öffentliche Funktion `STPL_ImportSlots()` direkt in SymDo geschrieben. Hausaufgaben, Prüfungen und Elternbriefe liegen in dieser eigenständigen Version zusätzlich als Statusvariablen/HTML-Übersicht im Modul vor. Dadurch muss das originale SymDo-Gateway nicht verändert werden und ein SymDo-Update überschreibt diese Integration nicht.
+Der aktuelle Stundenplan wird über die öffentliche Funktion `STPL_ImportSlots()` direkt in SymDo geschrieben. Hausaufgaben laufen über die vorhandene, gekoppelte SymDo-App-API. Prüfungen und Elternbriefe bleiben vorerst in der Schulmanager-Übersicht. Das originale SymDo-Gateway muss dafür nicht verändert werden.
 
 ## Sicherheit
 
@@ -49,3 +63,7 @@ Der aktuelle Stundenplan wird über die öffentliche Funktion `STPL_ImportSlots(
 - Das Passwort wird als IP-Symcon-Instanzeigenschaft gespeichert; im Formular wird es als Passwortfeld angezeigt.
 - Nach wiederholten Loginfehlern pausiert die automatische Anmeldung sechs Stunden.
 - Schulmanager verwendet hierfür interne Web-Endpunkte; diese können sich ändern.
+
+## Update 1.1
+
+Bei einer bereits vorhandenen Modulinstanz IP-Symcon nach dem Modulupdate einmal neu starten, damit die neuen Eigenschaften und internen Attribute registriert werden. Danach die Instanz öffnen, das SymDo-Gateway wählen und einmal koppeln.

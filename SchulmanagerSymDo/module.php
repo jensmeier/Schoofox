@@ -44,9 +44,12 @@ class SchulmanagerSymDo extends IPSModule
         $this->RegisterPropertyInteger('InstitutionID', 0);
         $this->RegisterPropertyInteger('UpdateMinutes', self::INTERVAL_DEFAULT);
         $this->RegisterPropertyInteger('TimetableInstanceID', 0);
+        $this->RegisterPropertyInteger('SymDoGatewayInstanceID', 0);
         $this->RegisterPropertyString('Mappings', '[]');
 
         $this->RegisterPropertyBoolean('ReadHomework', true);
+        $this->RegisterPropertyBoolean('SyncHomeworkToSymDo', true);
+        $this->RegisterPropertyInteger('HomeworkLookbackDays', 7);
         $this->RegisterPropertyBoolean('ReadExams', true);
         $this->RegisterPropertyBoolean('ReadLetters', true);
 
@@ -56,6 +59,9 @@ class SchulmanagerSymDo extends IPSModule
         $this->RegisterAttributeInteger('BundleVersionAt', 0);
         $this->RegisterAttributeInteger('LoginFails', 0);
         $this->RegisterAttributeInteger('LoginFailAt', 0);
+        $this->RegisterAttributeString('SymDoApiBase', '');
+        $this->RegisterAttributeString('SymDoToken', '');
+        $this->RegisterAttributeString('HomeworkLinks', '{}');
 
         $this->RegisterVariableString('Status', 'Status');
         $this->RegisterVariableInteger('LastUpdate', 'Letzte Aktualisierung', '~UnixTimestamp');
@@ -74,6 +80,13 @@ class SchulmanagerSymDo extends IPSModule
     public function ApplyChanges(): void
     {
         parent::ApplyChanges();
+
+        foreach (['HomeworkJSON', 'ExamsJSON', 'LettersJSON'] as $ident) {
+            $oid = $this->GetIDForIdent($ident);
+            if ($oid > 0) {
+                @IPS_SetHidden($oid, true);
+            }
+        }
 
         $minutes = max(self::INTERVAL_MIN, min(
             self::INTERVAL_MAX,
@@ -99,6 +112,18 @@ class SchulmanagerSymDo extends IPSModule
 
             case 'FetchStudents':
                 $this->UpdateFormField('StatusLabel', 'caption', $this->FetchStudents());
+                return;
+
+            case 'PairSymDo':
+                $this->UpdateFormField('SymDoStatusLabel', 'caption', $this->PairSymDo());
+                return;
+
+            case 'TestSymDo':
+                $this->UpdateFormField('SymDoStatusLabel', 'caption', $this->TestSymDo());
+                return;
+
+            case 'DisconnectSymDo':
+                $this->UpdateFormField('SymDoStatusLabel', 'caption', $this->DisconnectSymDo());
                 return;
 
             case 'DryRun':
@@ -194,6 +219,12 @@ class SchulmanagerSymDo extends IPSModule
                         ]
                     ],
                     [
+                        'type' => 'SelectInstance',
+                        'name' => 'SymDoGatewayInstanceID',
+                        'caption' => 'SymDo-Gateway (für Hausaufgaben)',
+                        'width' => '580px'
+                    ],
+                    [
                         'type' => 'Label',
                         'caption' => 'Empfehlung: 30 Minuten. Mehrere Kinder unter demselben Elternkonto werden mit nur einer Anmeldung gelesen.'
                     ],
@@ -265,11 +296,53 @@ class SchulmanagerSymDo extends IPSModule
                 'expanded' => true,
                 'items' => [
                     ['type' => 'CheckBox', 'name' => 'ReadHomework', 'caption' => 'Hausaufgaben lesen'],
+                    ['type' => 'CheckBox', 'name' => 'SyncHomeworkToSymDo', 'caption' => 'Hausaufgaben in die normale SymDo-Hausaufgabenliste übernehmen'],
+                    [
+                        'type' => 'NumberSpinner',
+                        'name' => 'HomeworkLookbackDays',
+                        'caption' => 'Überfällige Hausaufgaben noch übernehmen',
+                        'minimum' => 0,
+                        'maximum' => 60,
+                        'suffix' => ' Tage',
+                        'width' => '260px'
+                    ],
                     ['type' => 'CheckBox', 'name' => 'ReadExams', 'caption' => 'Klassenarbeiten / Prüfungen lesen'],
                     ['type' => 'CheckBox', 'name' => 'ReadLetters', 'caption' => 'Elternbriefe lesen'],
                     [
                         'type' => 'Label',
-                        'caption' => 'Stundenplan, Vertretungen, Entfall und Veranstaltungen werden direkt in SymDo importiert. Hausaufgaben, Prüfungen und Elternbriefe werden in dieser eigenständigen Version als Modul-Daten und Übersicht bereitgestellt.'
+                        'caption' => 'Stundenplan, Vertretungen, Entfall und Veranstaltungen werden direkt in SymDo importiert. Hausaufgaben können zusätzlich in die vorhandene SymDo-Hausaufgabenliste synchronisiert werden. Prüfungen und Elternbriefe bleiben vorerst in der Schulmanager-Übersicht.'
+                    ]
+                ]
+            ],
+            [
+                'type' => 'ExpansionPanel',
+                'caption' => 'SymDo-Hausaufgaben verbinden',
+                'expanded' => true,
+                'items' => [
+                    [
+                        'type' => 'Label',
+                        'caption' => 'Einmalig mit dem oben gewählten SymDo-Gateway koppeln. Das Modul erscheint danach im Gateway als gekoppeltes Gerät „Schulmanager Sync“.'
+                    ],
+                    ['type' => 'Label', 'name' => 'SymDoStatusLabel', 'caption' => $this->SymDoStatusText()],
+                    [
+                        'type' => 'RowLayout',
+                        'items' => [
+                            [
+                                'type' => 'Button',
+                                'caption' => 'Mit SymDo verbinden',
+                                'onClick' => 'IPS_RequestAction($id, \'PairSymDo\', 0);'
+                            ],
+                            [
+                                'type' => 'Button',
+                                'caption' => 'SymDo-Verbindung testen',
+                                'onClick' => 'IPS_RequestAction($id, \'TestSymDo\', 0);'
+                            ],
+                            [
+                                'type' => 'Button',
+                                'caption' => 'SymDo-Verbindung trennen',
+                                'onClick' => 'IPS_RequestAction($id, \'DisconnectSymDo\', 0);'
+                            ]
+                        ]
                     ]
                 ]
             ],
@@ -556,6 +629,16 @@ class SchulmanagerSymDo extends IPSModule
             }
 
             $this->StoreData($homeworkAll, $examsAll, $letters);
+
+            if ($apply
+                && $this->ReadPropertyBoolean('ReadHomework')
+                && $this->ReadPropertyBoolean('SyncHomeworkToSymDo')) {
+                try {
+                    $parts[] = $this->SyncHomeworkToSymDo($homeworkAll);
+                } catch (Throwable $e) {
+                    $parts[] = 'SymDo-Hausaufgaben: FEHLER — ' . $e->getMessage();
+                }
+            }
 
             $prefix = $apply ? 'Übernommen' : 'Trockenlauf';
             $text = $prefix . ' — ' . implode(' | ', $parts);
@@ -1188,6 +1271,303 @@ class SchulmanagerSymDo extends IPSModule
             throw new Exception('HTTP ' . $status . ' bei ' . parse_url($url, PHP_URL_PATH));
         }
         return (string)$response;
+    }
+
+    private function SymDoGatewayID(): int
+    {
+        $configured = $this->ReadPropertyInteger('SymDoGatewayInstanceID');
+        if ($configured > 0 && IPS_InstanceExists($configured)) {
+            return $configured;
+        }
+        $ids = @IPS_GetInstanceListByModuleID('{E677FE7B-28C9-4124-8B58-8A1FE2657E8D}');
+        if (is_array($ids) && count($ids) === 1) {
+            return (int)$ids[0];
+        }
+        return 0;
+    }
+
+    private function PairSymDo(): string
+    {
+        $gateway = $this->SymDoGatewayID();
+        if ($gateway <= 0) {
+            return 'Kein eindeutiges SymDo-Gateway gewählt.';
+        }
+        if (!function_exists('TGW_CreatePairing')) {
+            return 'TGW_CreatePairing fehlt. SymDo-Gateway ist nicht geladen oder zu alt.';
+        }
+        try {
+            $pair = json_decode((string)@TGW_CreatePairing($gateway), true);
+            if (!is_array($pair)) {
+                throw new Exception('Pairing-Antwort ist ungültig.');
+            }
+            $code = trim((string)($pair['code'] ?? ''));
+            $connectUrl = rtrim(trim((string)($pair['connectUrl'] ?? '')), '/');
+            if ($code === '' || $connectUrl === '') {
+                throw new Exception('Symcon Connect ist nicht verfügbar oder der Pairing-Code fehlt.');
+            }
+            $api = $connectUrl . '/hook/lists/app/v1';
+            $answer = $this->RequestJson($api . '/pair', [
+                'code' => $code,
+                'deviceName' => 'Schulmanager Sync',
+                'model' => 'IP-Symcon Modul',
+                'platform' => 'IP-Symcon',
+                'appVersion' => '1.1'
+            ]);
+            if (!is_array($answer) || ($answer['ok'] ?? false) !== true) {
+                throw new Exception('SymDo hat das Pairing abgelehnt.');
+            }
+            $token = trim((string)($answer['token'] ?? ''));
+            if ($token === '') {
+                throw new Exception('SymDo lieferte keinen Geräte-Token.');
+            }
+            $this->WriteAttributeString('SymDoApiBase', $api);
+            $this->WriteAttributeString('SymDoToken', $token);
+            return $this->TestSymDo();
+        } catch (Throwable $e) {
+            return 'SymDo-Verbindung fehlgeschlagen: ' . $e->getMessage();
+        }
+    }
+
+    private function TestSymDo(): string
+    {
+        $api = rtrim($this->ReadAttributeString('SymDoApiBase'), '/');
+        $token = trim($this->ReadAttributeString('SymDoToken'));
+        if ($api === '' || $token === '') {
+            return 'Noch nicht mit SymDo gekoppelt.';
+        }
+        try {
+            $answer = $this->RequestJson($api . '/discovery', null, $token);
+            if (!is_array($answer) || ($answer['ok'] ?? false) !== true) {
+                throw new Exception('Discovery wurde abgelehnt.');
+            }
+            $users = is_array($answer['users'] ?? null) ? $answer['users'] : [];
+            return 'SymDo verbunden — ' . count($users) . ' Familienmitglied(er) gefunden.';
+        } catch (Throwable $e) {
+            return 'SymDo-Verbindung fehlerhaft: ' . $e->getMessage();
+        }
+    }
+
+    private function DisconnectSymDo(): string
+    {
+        $api = rtrim($this->ReadAttributeString('SymDoApiBase'), '/');
+        $token = trim($this->ReadAttributeString('SymDoToken'));
+        if ($api !== '' && $token !== '') {
+            try {
+                $this->RequestJson($api . '/unpair', ['reason' => 'Schulmanager Sync'], $token);
+            } catch (Throwable $e) {
+            }
+        }
+        $this->WriteAttributeString('SymDoApiBase', '');
+        $this->WriteAttributeString('SymDoToken', '');
+        $this->WriteAttributeString('HomeworkLinks', '{}');
+        return 'SymDo-Verbindung getrennt.';
+    }
+
+    private function SymDoStatusText(): string
+    {
+        return trim($this->ReadAttributeString('SymDoToken')) !== ''
+            ? 'SymDo ist gekoppelt. Mit „SymDo-Verbindung testen“ kann die Verbindung geprüft werden.'
+            : 'Noch nicht mit SymDo gekoppelt.';
+    }
+
+    private function SymDoUsers(): array
+    {
+        $gateway = $this->SymDoGatewayID();
+        if ($gateway > 0 && function_exists('TGW_GetUsers')) {
+            try {
+                $users = json_decode((string)@TGW_GetUsers($gateway), true);
+                if (is_array($users)) {
+                    return array_values(array_filter($users, 'is_array'));
+                }
+            } catch (Throwable $e) {
+            }
+        }
+        $api = rtrim($this->ReadAttributeString('SymDoApiBase'), '/');
+        $token = trim($this->ReadAttributeString('SymDoToken'));
+        if ($api === '' || $token === '') {
+            return [];
+        }
+        $answer = $this->RequestJson($api . '/discovery', null, $token);
+        return is_array($answer['users'] ?? null)
+            ? array_values(array_filter($answer['users'], 'is_array'))
+            : [];
+    }
+
+    private function ResolveSymDoUserID(string $childName, array $users): string
+    {
+        $needle = mb_strtolower(trim($childName));
+        if ($needle === '') {
+            return '';
+        }
+        foreach ($users as $u) {
+            if (!is_array($u)) {
+                continue;
+            }
+            if (mb_strtolower(trim((string)($u['name'] ?? ''))) === $needle) {
+                return trim((string)($u['id'] ?? ''));
+            }
+        }
+        $hits = [];
+        foreach ($users as $u) {
+            if (!is_array($u)) {
+                continue;
+            }
+            $name = trim((string)($u['name'] ?? ''));
+            $parts = preg_split('/\\s+/u', $name);
+            $first = is_array($parts) && $parts !== [] ? (string)$parts[0] : '';
+            if (mb_strtolower($first) === $needle) {
+                $hits[] = trim((string)($u['id'] ?? ''));
+            }
+        }
+        $hits = array_values(array_filter(array_unique($hits)));
+        return count($hits) === 1 ? $hits[0] : '';
+    }
+
+    private function SymDoHomeworkRequest(array $body): array
+    {
+        $api = rtrim($this->ReadAttributeString('SymDoApiBase'), '/');
+        $token = trim($this->ReadAttributeString('SymDoToken'));
+        if ($api === '' || $token === '') {
+            throw new Exception('SymDo ist noch nicht gekoppelt.');
+        }
+        $answer = $this->RequestJson($api . '/homework', $body, $token);
+        if (!is_array($answer) || ($answer['ok'] ?? false) !== true) {
+            $code = is_array($answer) ? (string)($answer['error']['code'] ?? 'unknown') : 'invalid_response';
+            throw new Exception('SymDo-Hausaufgaben: ' . $code);
+        }
+        return $answer;
+    }
+
+    private function SyncHomeworkToSymDo(array $homeworkAll): string
+    {
+        $api = rtrim($this->ReadAttributeString('SymDoApiBase'), '/');
+        $token = trim($this->ReadAttributeString('SymDoToken'));
+        if ($api === '' || $token === '') {
+            return 'SymDo-Hausaufgaben: noch nicht verbunden';
+        }
+        $users = $this->SymDoUsers();
+        if ($users === []) {
+            throw new Exception('keine SymDo-Familienmitglieder gefunden');
+        }
+        $current = $this->RequestJson($api . '/homework', null, $token);
+        if (!is_array($current) || ($current['ok'] ?? false) !== true) {
+            throw new Exception('Bestand konnte nicht gelesen werden');
+        }
+        $existing = [];
+        foreach ((array)($current['items'] ?? []) as $item) {
+            if (is_array($item) && trim((string)($item['id'] ?? '')) !== '') {
+                $existing[(string)$item['id']] = $item;
+            }
+        }
+        $links = json_decode($this->ReadAttributeString('HomeworkLinks'), true);
+        $links = is_array($links) ? $links : [];
+        $seen = [];
+        $newCount = 0;
+        $updateCount = 0;
+        $deleteCount = 0;
+        $skipCount = 0;
+        $lookback = max(0, min(60, $this->ReadPropertyInteger('HomeworkLookbackDays')));
+        $cutoff = (new DateTimeImmutable('today'))->modify('-' . $lookback . ' days')->format('Y-m-d');
+
+        foreach ($homeworkAll as $studentId => $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $childName = trim((string)($entry['child'] ?? ''));
+            $userId = $this->ResolveSymDoUserID($childName, $users);
+            if ($userId === '') {
+                $skipCount += count((array)($entry['items'] ?? []));
+                continue;
+            }
+            foreach ((array)($entry['items'] ?? []) as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $due = trim((string)($item['date'] ?? ''));
+                $subject = trim((string)($item['subject'] ?? ''));
+                $note = trim((string)($item['homework'] ?? ''));
+                if ($due === '' || $subject === '' || $note === '' || $due < $cutoff) {
+                    continue;
+                }
+                $schoolId = trim((string)($item['id'] ?? ''));
+                $keyMaterial = $schoolId !== ''
+                    ? (string)$studentId . '|id|' . $schoolId
+                    : (string)$studentId . '|' . $due . '|' . mb_strtolower($subject) . '|' . $note;
+                $key = sha1($keyMaterial);
+                $seen[$key] = true;
+                $srcId = (int)(crc32($keyMaterial) & 0x7fffffff);
+                if ($srcId <= 0) {
+                    $srcId = 1;
+                }
+                $linkedId = trim((string)($links[$key]['id'] ?? ''));
+                if ($linkedId !== '' && isset($existing[$linkedId])) {
+                    $old = $existing[$linkedId];
+                    if ((string)($old['childId'] ?? '') !== $userId
+                        || (string)($old['subject'] ?? '') !== $subject
+                        || (string)($old['due'] ?? '') !== $due
+                        || (string)($old['note'] ?? '') !== $note) {
+                        $res = $this->SymDoHomeworkRequest([
+                            'action' => 'update',
+                            'id' => $linkedId,
+                            'subject' => $subject,
+                            'due' => $due,
+                            'note' => $note
+                        ]);
+                        if (is_array($res['item'] ?? null)) {
+                            $existing[$linkedId] = $res['item'];
+                        }
+                        $updateCount++;
+                    }
+                    $links[$key] = [
+                        'id' => $linkedId,
+                        'studentId' => (string)$studentId,
+                        'due' => $due,
+                        'seenAt' => time()
+                    ];
+                    continue;
+                }
+                $res = $this->SymDoHomeworkRequest([
+                    'action' => 'create',
+                    'childId' => $userId,
+                    'subject' => $subject,
+                    'due' => $due,
+                    'note' => $note,
+                    'source' => 'app',
+                    'srcId' => $srcId
+                ]);
+                $created = is_array($res['item'] ?? null) ? $res['item'] : [];
+                $newId = trim((string)($created['id'] ?? ''));
+                if ($newId === '') {
+                    throw new Exception('angelegte Hausaufgabe ohne ID');
+                }
+                $existing[$newId] = $created;
+                $links[$key] = [
+                    'id' => $newId,
+                    'studentId' => (string)$studentId,
+                    'due' => $due,
+                    'seenAt' => time()
+                ];
+                $newCount++;
+            }
+        }
+
+        foreach (array_keys($links) as $key) {
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $id = trim((string)($links[$key]['id'] ?? ''));
+            if ($id !== '' && isset($existing[$id]) && ($existing[$id]['done'] ?? false) !== true) {
+                $this->SymDoHomeworkRequest(['action' => 'delete', 'id' => $id]);
+                $deleteCount++;
+            }
+            unset($links[$key]);
+        }
+        $this->WriteAttributeString('HomeworkLinks', json_encode($links, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $text = sprintf('SymDo-Hausaufgaben: %d neu, %d aktualisiert, %d entfernt', $newCount, $updateCount, $deleteCount);
+        if ($skipCount > 0) {
+            $text .= ', ' . $skipCount . ' ohne eindeutige Kind-Zuordnung';
+        }
+        return $text;
     }
 
     /** @return array<int, array{enabled:bool,studentId:string,symdoChild:string}> */
