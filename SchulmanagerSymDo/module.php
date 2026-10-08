@@ -197,21 +197,37 @@ class SchulmanagerSymDo extends IPSModule
 
         return <<<'HTML'
 <style>
-:root{font-family:Arial,sans-serif;color:#202124}
+:root{
+  font-family:Arial,sans-serif;color:#202124;
+  --sym-mt:0px;--sym-ms:0px;--sym-mb:0px;--smsd-edge:8px;
+}
 *{box-sizing:border-box}
-body{margin:0;background:transparent;color:inherit}
+html,body{height:100%}
+body{margin:0!important;padding:0!important;overflow:hidden;background:transparent;color:inherit}
 #smsd-root{height:100%;overflow:hidden}
-.smsd-shell{height:100%;display:flex;flex-direction:column;gap:10px;padding:10px}
-.smsd-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+/* IP-Symcon blendet den Instanznamen über dem HTML ein und übergibt die dafür
+   reservierten Ränder als Query-Parameter. Diese Ränder tragen wir selbst auf,
+   damit Inhalt und Aktualisieren-Knopf nicht mehr unter dem Kacheltitel liegen. */
+.smsd-shell{
+  height:100%;display:flex;flex-direction:column;gap:9px;
+  padding:max(var(--sym-mt),env(safe-area-inset-top,0px))
+          max(var(--sym-ms),var(--smsd-edge))
+          calc(var(--sym-mb) + var(--smsd-edge))
+          max(var(--sym-ms),var(--smsd-edge));
+}
+.smsd-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-height:30px}
 .smsd-head h2{margin:0;font-size:24px;line-height:1.15}
+/* Wenn Symcon bereits einen Kacheltitel zeichnet, brauchen wir keine zweite
+   Überschrift im HTML. Ohne Systemtitel (z.B. Testansicht) bleibt sie sichtbar. */
+html.smsd-has-system-title .smsd-head h2{display:none}
 .smsd-source{font-size:12px;color:#667085;background:rgba(127,127,127,.10);padding:4px 8px;border-radius:999px}
 .smsd-spacer{flex:1}
-.smsd-refresh{border:0;border-radius:9px;padding:7px 10px;cursor:pointer;background:rgba(0,150,136,.12);color:inherit;font-weight:600}
-.smsd-tabs{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}
+.smsd-refresh{border:0;border-radius:9px;padding:7px 10px;cursor:pointer;background:rgba(0,150,136,.12);color:inherit;font-weight:600;white-space:nowrap}
+.smsd-tabs{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin;flex:0 0 auto}
 .smsd-tab{border:1px solid rgba(127,127,127,.24);background:rgba(127,127,127,.07);color:inherit;border-radius:999px;padding:7px 13px;cursor:pointer;white-space:nowrap;font-weight:600}
 .smsd-tab.active{background:#10bfae;color:white;border-color:#10bfae}
 .smsd-body{min-height:0;overflow:hidden;flex:1}
-.smsd-child-panel{display:none;height:100%;overflow-y:auto;padding-right:4px;scrollbar-width:thin}
+.smsd-child-panel{display:none;height:100%;overflow-y:auto;padding-right:4px;scrollbar-width:thin;scrollbar-gutter:stable}
 .smsd-child-panel.active{display:block}
 .smsd-card{border:1px solid rgba(127,127,127,.20);border-radius:12px;padding:12px;background:rgba(255,255,255,.03);margin-bottom:10px}
 .smsd-card h3{margin:0 0 9px 0;font-size:18px}
@@ -220,14 +236,37 @@ body{margin:0;background:transparent;color:inherit}
 .smsd-table{width:100%;border-collapse:collapse;font-size:14px}
 .smsd-table th,.smsd-table td{padding:7px;border-bottom:1px solid rgba(127,127,127,.18);text-align:left;vertical-align:top}
 .smsd-table th:last-child,.smsd-table td:last-child{text-align:right}
-.smsd-letter-scroll{overflow-y:auto;padding-right:4px;scrollbar-width:thin}
+.smsd-letter-scroll{overflow-y:auto;padding-right:4px;scrollbar-width:thin;scrollbar-gutter:stable}
 .smsd-letter{margin:5px 0;padding:8px 10px;border:1px solid rgba(127,127,127,.18);border-radius:8px;background:rgba(127,127,127,.035)}
 .smsd-letter summary{cursor:pointer}
 .smsd-letter-text{white-space:pre-wrap;margin:10px 2px 4px 2px;line-height:1.45}
 .smsd-foot{font-size:11px;color:#777;margin-top:6px}
-@media(max-width:650px){.smsd-head h2{font-size:20px}.smsd-table{font-size:12px}.smsd-table th,.smsd-table td{padding:5px}.smsd-shell{padding:7px}}
+@media(max-width:650px){
+  .smsd-head h2{font-size:20px}.smsd-table{font-size:12px}.smsd-table th,.smsd-table td{padding:5px}
+}
+@media(max-width:520px){
+  .smsd-source{display:none}
+  .smsd-refresh{font-size:0;width:36px;height:32px;padding:0}
+  .smsd-refresh::before{content:"↻";font-size:19px;line-height:1}
+  .smsd-card{padding:10px}
+  .smsd-card h3{font-size:17px}
+  .smsd-table th:nth-child(3),.smsd-table td:nth-child(3){display:none}
+}
 </style>
 <script>
+/* Systemränder früh übernehmen. Symcon hängt margintop/marginside/marginbottom
+   an die Kachel-URL. Dadurch bleibt der Inhalt unter dem systemeigenen Titel. */
+(function smsdSystemMargins(){
+  try{
+    const p=new URLSearchParams(window.location.search);
+    const px=(name)=>{const v=parseInt(p.get(name),10);return Number.isFinite(v)&&v>=0?v+'px':null};
+    const root=document.documentElement;
+    const mt=px('margintop'),ms=px('marginside'),mb=px('marginbottom');
+    if(mt!==null){root.style.setProperty('--sym-mt',mt);if(parseInt(mt,10)>0)root.classList.add('smsd-has-system-title')}
+    if(ms!==null)root.style.setProperty('--sym-ms',ms);
+    if(mb!==null)root.style.setProperty('--sym-mb',mb);
+  }catch(e){}
+})();
 function smsdActivate(key){
   document.querySelectorAll('.smsd-tab').forEach(function(b){b.classList.toggle('active',b.dataset.smsdTab===key)});
   document.querySelectorAll('.smsd-child-panel').forEach(function(p){p.classList.toggle('active',p.dataset.smsdPanel===key)});

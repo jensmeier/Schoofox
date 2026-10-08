@@ -2,7 +2,16 @@
 
 Eigenständiges IP-Symcon-Modul für **Schulmanager Online** mit Anbindung an **SymDo Stundenplan**, **SymDo Hausaufgaben** und **SymDo/OpenCalendar**.
 
-## Version 1.3 / Build 4
+## Version 1.3.1 / Build 5
+
+
+Neu in 1.3.1:
+
+- Layout-Fix für die IP-Symcon Kachel: Inhalt berücksichtigt jetzt die von Symcon vorgegebenen oberen/seitlichen/unteren Kachelränder
+- der interne Titel wird automatisch ausgeblendet, wenn Symcon bereits den Instanznamen als Kacheltitel anzeigt – dadurch kein doppeltes „Klassenseiten“ mehr
+- der Aktualisieren-Knopf liegt nicht mehr unter dem Symcon-Titel; auf kleinen Kacheln wird er platzsparend nur als ↻ angezeigt
+- auf schmalen Kacheln wird die Prüfungs-Tabelle kompakter dargestellt
+- Hauptbereich und Elternbriefe behalten getrennte, stabile Scrollbereiche
 
 Neu in 1.3:
 
