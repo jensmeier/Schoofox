@@ -1,0 +1,4 @@
+SymDo-Family-Organizer
+Branch: SymDo-Beta
+Base commit checked on 2026-10-07:
+30683218eba8aaa5e77523ba881109f20d20c3ee

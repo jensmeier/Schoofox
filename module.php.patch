@@ -1,0 +1,107 @@
+*** SymDoGateway/module.php	2026-10-07
+--- SymDoGateway/module.php	2026-10-07
+***************
+*** 41,46 ****
+  require_once __DIR__ . '/libs/EduStore.php';
+  require_once __DIR__ . '/libs/UntisLesen.php';
+  require_once __DIR__ . '/libs/WebUntis.php';
+  require_once __DIR__ . '/libs/MoodleCalc.php';
+  require_once __DIR__ . '/libs/MoodleLesen.php';
+  require_once __DIR__ . '/libs/Moodle.php';
+--- 41,47 ----
+  require_once __DIR__ . '/libs/EduStore.php';
+  require_once __DIR__ . '/libs/UntisLesen.php';
+  require_once __DIR__ . '/libs/WebUntis.php';
++ require_once __DIR__ . '/libs/Schulmanager.php';
+  require_once __DIR__ . '/libs/MoodleCalc.php';
+  require_once __DIR__ . '/libs/MoodleLesen.php';
+  require_once __DIR__ . '/libs/Moodle.php';
+***************
+*** 99,104 ****
+      use EduStore;
+      use UntisLesen;
+      use WebUntis;
+      use MoodleLesen;
+      use Moodle;
+  
+--- 100,106 ----
+      use EduStore;
+      use UntisLesen;
+      use WebUntis;
++     use Schulmanager;
+      use MoodleLesen;
+      use Moodle;
+  
+***************
+*** 181,187 ****
+          $this->EduCreate();
+          // Klassenseiten: der eigene Bestand der Karten (vorher lagen sie in den Notizen)
+          $this->EduStoreCreate();
+          $this->UntisCreate();
+          $this->MoodleCreate();
+          // Kalender: Zuordnung, Erinnerungen und ihr Timer
+          $this->CalCreateProps();
+--- 183,190 ----
+          $this->EduCreate();
+          // Klassenseiten: der eigene Bestand der Karten (vorher lagen sie in den Notizen)
+          $this->EduStoreCreate();
+          $this->UntisCreate();
++         $this->SchulmanagerCreate();
+          $this->MoodleCreate();
+          // Kalender: Zuordnung, Erinnerungen und ihr Timer
+          $this->CalCreateProps();
+***************
+*** 229,235 ****
+              $this->MailApplyChanges();
+              $this->EduApplyChanges();
+              $this->UntisApplyChanges();
+-         $this->MoodleApplyChanges();
++             $this->MoodleApplyChanges();
+              $this->CalApplyChanges();
+              $this->BriefingApplyChanges();
+              $this->PushApplyChanges();
+--- 232,239 ----
+              $this->MailApplyChanges();
+              $this->EduApplyChanges();
+              $this->UntisApplyChanges();
++             $this->SchulmanagerApplyChanges();
++             $this->MoodleApplyChanges();
+              $this->CalApplyChanges();
+              $this->BriefingApplyChanges();
+              $this->PushApplyChanges();
+***************
+*** 300,308 ****
+          if ($this->EduRequestAction($Ident, $Value)) {
+              return;
+          }
+          if ($this->UntisRequestAction($Ident, $Value)) {
+              return;
+          }
+          if ($this->MoodleRequestAction($Ident, $Value)) {
+              return;
+          }
+--- 304,315 ----
+          if ($this->EduRequestAction($Ident, $Value)) {
+              return;
+          }
+          if ($this->UntisRequestAction($Ident, $Value)) {
+              return;
+          }
++         if ($this->SchulmanagerRequestAction($Ident, $Value)) {
++             return;
++         }
+          if ($this->MoodleRequestAction($Ident, $Value)) {
+              return;
+          }
+***************
+*** 487,494 ****
+              $schule = [
+                  'type'     => 'ExpansionPanel',
+                  'name'     => 'SchoolPanel',
+                  'caption'  => $this->Translate('School'),
+                  'expanded' => false,
+-                 'items'    => [$this->GetEduPanel(), $this->GetUntisPanel(),
+-                                 $this->GetMoodlePanel()],
++                 'items'    => [$this->GetEduPanel(), $this->GetUntisPanel(),
++                                 $this->GetSchulmanagerPanel(), $this->GetMoodlePanel()],
+              ];
