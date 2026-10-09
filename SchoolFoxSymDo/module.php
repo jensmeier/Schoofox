@@ -235,7 +235,8 @@ class SchoolFoxSymDo extends IPSModule
 .sfx-head{display:flex;align-items:center;gap:9px;min-height:30px}.sfx-head h2{font-size:23px;margin:0}.sfx-badge{font-size:12px;padding:4px 8px;border-radius:999px;background:rgba(126,87,194,.12);color:inherit}.sfx-spacer{flex:1}.sfx-refresh{border:0;border-radius:9px;padding:7px 10px;background:rgba(0,150,136,.12);color:inherit;cursor:pointer;font-weight:700}
 html.sfx-has-system-title .sfx-head h2{display:none}.sfx-body{min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-gutter:stable;padding-right:4px}.sfx-child{font-size:21px;font-weight:700;margin:2px 0 8px}
 .sfx-alert{border:1px solid rgba(245,166,35,.55);background:rgba(245,166,35,.12);border-radius:11px;padding:10px 12px;margin-bottom:10px;display:flex;gap:8px;align-items:flex-start}.sfx-alert button{margin-left:auto;border:0;background:transparent;cursor:pointer;font-size:18px;color:inherit}
-.sfx-card{border:1px solid rgba(127,127,127,.20);border-radius:12px;padding:12px;background:rgba(255,255,255,.03);margin-bottom:10px}.sfx-card h3{margin:0 0 10px;font-size:18px}.sfx-subject{padding:10px 0;border-bottom:1px solid rgba(127,127,127,.16)}.sfx-subject:last-child{border-bottom:0}.sfx-subject-head{display:flex;align-items:center;gap:8px}.sfx-subject-name{font-weight:700;font-size:16px}.sfx-add{margin-left:auto;width:31px;height:31px;border-radius:50%;border:0;background:rgba(16,191,174,.15);color:inherit;font-size:20px;cursor:pointer}.sfx-grades{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.sfx-grade{border:1px solid rgba(127,127,127,.25);background:rgba(127,127,127,.07);color:inherit;border-radius:999px;padding:5px 10px;cursor:pointer;font-weight:700}.sfx-average{margin-top:8px;font-size:13px;color:#666}.sfx-empty{padding:10px;border-radius:8px;background:rgba(127,127,127,.08);color:#777}
+.sfx-card{border:1px solid rgba(127,127,127,.20);border-radius:12px;padding:12px;background:rgba(255,255,255,.03);margin-bottom:10px}.sfx-card h3{margin:0 0 10px;font-size:18px}.sfx-grade-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 14px}.sfx-subject{min-width:0;display:grid;grid-template-columns:minmax(90px,1.1fr) minmax(0,1.4fr) auto 30px;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid rgba(127,127,127,.14)}.sfx-subject-name{min-width:0;font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sfx-add{width:28px;height:28px;border-radius:50%;border:0;background:rgba(16,191,174,.15);color:inherit;font-size:18px;line-height:1;cursor:pointer}.sfx-grades{min-width:0;display:flex;gap:4px;flex-wrap:wrap;align-items:center}.sfx-grade{border:1px solid rgba(127,127,127,.25);background:rgba(127,127,127,.07);color:inherit;border-radius:999px;padding:3px 7px;cursor:pointer;font-weight:700;font-size:13px;line-height:1.15}.sfx-average{font-size:12px;color:#666;white-space:nowrap}.sfx-no-grade{font-size:12px;color:#888;white-space:nowrap}.sfx-empty{padding:10px;border-radius:8px;background:rgba(127,127,127,.08);color:#777}
+@media(max-width:850px){.sfx-grade-list{grid-template-columns:1fr}}
 .sfx-message-scroll{overflow-y:auto;scrollbar-width:thin;scrollbar-gutter:stable;padding-right:4px}.sfx-message{border:1px solid rgba(127,127,127,.18);border-radius:8px;padding:8px 10px;margin:6px 0;background:rgba(127,127,127,.035)}.sfx-message summary{cursor:pointer;font-weight:700}.sfx-meta{font-size:12px;color:#777;margin:5px 0}.sfx-text{white-space:pre-wrap;line-height:1.4;margin-top:8px}.sfx-att{font-size:12px;margin-top:8px}.sfx-att span{display:inline-block;margin:2px 5px 2px 0;padding:3px 7px;border-radius:7px;background:rgba(127,127,127,.08)}
 .sfx-modal{position:fixed;inset:0;background:rgba(0,0,0,.40);display:none;align-items:center;justify-content:center;padding:16px;z-index:1000}.sfx-modal.open{display:flex}.sfx-dialog{width:min(380px,100%);background:#fff;color:#202124;border-radius:14px;padding:16px;box-shadow:0 14px 40px rgba(0,0,0,.30)}@media(prefers-color-scheme:dark){.sfx-dialog{background:#252525;color:#eee}}.sfx-dialog h3{margin:0 0 12px}.sfx-dialog input{width:100%;font-size:18px;padding:10px;border:1px solid #aaa;border-radius:9px;background:transparent;color:inherit}.sfx-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}.sfx-actions button{border:0;border-radius:9px;padding:9px 12px;cursor:pointer}.sfx-save{background:var(--sfx-accent);color:white}.sfx-delete{background:#e53935;color:white;margin-right:auto}
 @media(max-width:520px){.sfx-head h2{font-size:19px}.sfx-badge{display:none}.sfx-refresh{font-size:0;width:36px;height:32px;padding:0}.sfx-refresh::before{content:"↻";font-size:19px}.sfx-card{padding:10px}}
@@ -719,12 +720,12 @@ HTML
             return $html . '<div class="sfx-empty">Noch keine Fächer gefunden. Bitte Toms Stundenplan in „SymDo – Stundenplan“ eintragen und diese Instanz dort auswählen.</div></section>';
         }
 
+        $html .= '<div class="sfx-grade-list">';
         foreach ($subjects as $subject) {
             $subjectGrades = array_values(array_filter($grades, static fn(array $g): bool => (string)($g['subject'] ?? '') === $subject));
-            $html .= '<div class="sfx-subject"><div class="sfx-subject-head"><div class="sfx-subject-name">' . $this->H($subject) . '</div>'
-                . '<button class="sfx-add" title="Note hinzufügen" data-subject="' . $this->HAttr($subject) . '">+</button></div>';
+            $html .= '<div class="sfx-subject"><div class="sfx-subject-name" title="' . $this->HAttr($subject) . '">' . $this->H($subject) . '</div>';
             if ($subjectGrades === []) {
-                $html .= '<div class="sfx-grades"><span class="sfx-empty">Noch keine Noten</span></div>';
+                $html .= '<div class="sfx-grades"><span class="sfx-no-grade">–</span></div><div class="sfx-average">Ø –</div>';
             } else {
                 $sum = 0.0;
                 $html .= '<div class="sfx-grades">';
@@ -733,11 +734,11 @@ HTML
                     $sum += $value;
                     $html .= '<button class="sfx-grade" title="Ändern oder löschen" data-id="' . $this->HAttr((string)($g['id'] ?? '')) . '" data-subject="' . $this->HAttr($subject) . '" data-value="' . $this->HAttr($this->GradeText($value)) . '">' . $this->H($this->GradeText($value)) . '</button>';
                 }
-                $html .= '</div><div class="sfx-average">Durchschnitt: <b>' . number_format($sum / count($subjectGrades), 2, ',', '.') . '</b></div>';
+                $html .= '</div><div class="sfx-average">Ø <b>' . number_format($sum / count($subjectGrades), 2, ',', '.') . '</b></div>';
             }
-            $html .= '</div>';
+            $html .= '<button class="sfx-add" title="Note hinzufügen" data-subject="' . $this->HAttr($subject) . '">+</button></div>';
         }
-        return $html . '</section>';
+        return $html . '</div></section>';
     }
 
     private function MessagesHtml(): string
