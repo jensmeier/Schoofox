@@ -1,12 +1,12 @@
 {
   "id": "{B67F5E3B-1D9D-4E85-8C86-B4D5E23B9772}",
   "author": "JZCG",
-  "name": "Schulmanager SymDo",
+  "name": "SymDo Schul-Integrationen",
   "url": "https://github.com/jensmeier/Schoofox.git",
   "compatibility": {
     "version": "8.1"
   },
-  "version": "1.3.1",
-  "build": 5,
-  "date": 1791482769
+  "version": "1.4.0",
+  "build": 6,
+  "date": 1791572640
 }

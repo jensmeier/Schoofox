@@ -1,0 +1,15 @@
+{
+  "id": "{2B2B0D25-3509-4E43-8A20-6CC633A8B1C4}",
+  "name": "SchoolFox SymDo",
+  "type": 3,
+  "vendor": "JZCG",
+  "aliases": [
+    "SchoolFox für SymDo",
+    "SymDo - Klassenseiten (SchoolFox)"
+  ],
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "SFSD",
+  "url": "https://github.com/jensmeier/Schoofox"
+}
